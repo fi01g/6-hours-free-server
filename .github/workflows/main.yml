@@ -38,8 +38,8 @@ jobs:
           Set-LocalUser -Name $targetName -Password $securePass
 
           # Make sure password never expires
-          Set-LocalUser -Name $targetName -PasswordNeverExpires : $true
-          Set-LocalUser -Name $targetName -AccountNeverExpires : $true
+          Set-LocalUser -Name $targetName -PasswordNeverExpires
+          Set-LocalUser -Name $targetName -AccountNeverExpires
 
           # Ensure it's in Administrators and Remote Desktop Users
           Add-LocalGroupMember -Group "Administrators" -Member $targetName -ErrorAction SilentlyContinue
@@ -86,7 +86,7 @@ jobs:
             Start-Service -Name "ClipSvc" -ErrorAction SilentlyContinue
             Set-Service -Name "ClipSvc" -StartupType Automatic -ErrorAction SilentlyContinue
             Write-Host "==> AppX services enabled."
-          }
+
 
       - name: Install Tailscale
         run: |
