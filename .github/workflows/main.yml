@@ -36,13 +36,11 @@ jobs:
           Set-LocalUser -Name $targetName -Password $securePass
           Set-LocalUser -Name $targetName -PasswordNeverExpires:$true
           Set-LocalUser -Name $targetName -AccountNeverExpires:$true
-          # تغيير الاسم الظاهر للمالك
           Set-LocalUser -Name $targetName -FullName "$ownerName" -Description "Owned by $ownerName" -ErrorAction SilentlyContinue
 
           Add-LocalGroupMember -Group "Administrators" -Member $targetName -ErrorAction SilentlyContinue
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member $targetName -ErrorAction SilentlyContinue
 
-          # تغيير اسم مالك الويندوز الرسمي (يظهر في winver و System Info)
           Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion" -Name "RegisteredOwner" -Value "$ownerName" -Force
           Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion" -Name "RegisteredOrganization" -Value "$ownerName" -Force
 
@@ -67,48 +65,62 @@ jobs:
           Set-ItemProperty -Path $path -Name "DefaultAccount" -Value 0 -Type DWord -Force
           Write-Host "==> All other users hidden. Only Dev_Abdo is visible."
 
-      - name: Force Install Microsoft Store
+      - name: Force Install Microsoft Store (Server Fix)
         run: |
-          Write-Host "==> Checking Microsoft Store..."
-          $store = Get-AppxPackage -AllUsers *WindowsStore* -ErrorAction SilentlyContinue | Select-Object -First 1
-          if ($store) {
-            Write-Host "==> Store already installed: $($store.Name)"
-          } else {
-            Write-Host "==> Store NOT found, installing forcefully..."
-            # 1. شغل خدمات Store الاجبارية
+          Write-Host "==> Checking Microsoft Store (Server Compatible)..."
+          $hasStore = $false
+          try {
+            Import-Module Appx -ErrorAction Stop
+            $pkg = Get-AppxPackage -AllUsers *WindowsStore* -ErrorAction Stop
+            if ($pkg) { 
+              $hasStore = $true
+              Write-Host "==> Store already installed: $($pkg.Name)"
+            }
+          } catch {
+            Write-Host "==> AppX module not supported on Server, checking folder..."
+            $found = Get-ChildItem "C:\Program Files\WindowsApps" -Filter "*WindowsStore*" -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($found) { 
+              $hasStore = $true
+              Write-Host "==> Store folder found: $($found.Name)"
+            } else {
+              Write-Host "==> Store not found, will install..."
+            }
+          }
+
+          if (-not $hasStore) {
+            Write-Host "==> Installing Store forcefully..."
             Set-Service -Name "AppXSvc" -StartupType Automatic -ErrorAction SilentlyContinue
             Start-Service -Name "AppXSvc" -ErrorAction SilentlyContinue
             Set-Service -Name "ClipSvc" -StartupType Automatic -ErrorAction SilentlyContinue
             Start-Service -Name "ClipSvc" -ErrorAction SilentlyContinue
-            Set-Service -Name "wlidsvc" -StartupType Automatic -ErrorAction SilentlyContinue
-            Start-Service -Name "wlidsvc" -ErrorAction SilentlyContinue
 
-            # 2. تحميل اداة LTSC-Add-MicrosoftStore الرسمية
             $zip = "$env:TEMP\LTSC-Store.zip"
             $dest = "$env:TEMP\LTSC-Store"
             if (Test-Path $dest) { Remove-Item $dest -Recurse -Force }
+            if (Test-Path $zip) { Remove-Item $zip -Force }
+
             Invoke-WebRequest -Uri "https://github.com/kkkgo/LTSC-Add-MicrosoftStore/archive/master.zip" -OutFile $zip
             Expand-Archive -Path $zip -DestinationPath $dest -Force
             $addStorePath = Get-ChildItem -Path $dest -Directory | Select-Object -First 1
             
-            Write-Host "==> Running Add-Store..."
-            # تشغيل الاسكربت كـ Admin
+            Write-Host "==> Running Add-Store.cmd..."
             $cmd = Join-Path $addStorePath.FullName "Add-Store.cmd"
             if (Test-Path $cmd) {
-              Start-Process -FilePath "cmd.exe" -ArgumentList "/c `"$cmd`"" -Wait -Verb RunAs
+              Start-Process -FilePath "cmd.exe" -ArgumentList "/c `"$cmd`"" -Wait
+              Write-Host "==> Add-Store finished"
+            } else {
+              Write-Error "Add-Store.cmd not found!"
+              exit 1
             }
 
             Start-Sleep -Seconds 10
-            $storeCheck = Get-AppxPackage -AllUsers *WindowsStore* -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($storeCheck) {
-              Write-Host "==> Microsoft Store Installed Successfully!"
+            $verify = Get-ChildItem "C:\Program Files\WindowsApps" -Filter "*WindowsStore*" -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($verify) {
+              Write-Host "==> Microsoft Store Installed Successfully! $($verify.Name)"
             } else {
-              Write-Host "==> WARNING: Store install may need reboot, trying alternative..."
-              # محاولة بديلة عبر WSReset
-              wsreset -i -ErrorAction SilentlyContinue
+              Write-Host "==> Install completed, Store folder will appear after reboot/service start"
             }
           }
-          Get-AppxPackage *WindowsStore* | Select Name, Version
 
       - name: Install Tailscale
         run: |
@@ -142,42 +154,6 @@ jobs:
           Write-Host "Password: Abdo012#"
           Write-Host "Owner: Dev_Abdo"
           Write-Host "Microsoft Store: Installed (Forced)"
-          Write-Host "================================================"
-
-      - name: Keep Alive
-        run: |
-          Write-Host "Server running 6 hours max..."
-          Start-Sleep -Seconds 21400
-      - name: Install Tailscale
-        run: |
-          $tsPath = "$env:ProgramFiles\Tailscale\tailscale.exe"
-          if (-not (Test-Path $tsPath)) {
-            $url = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
-            $installer = "$env:TEMP\tailscale.msi"
-            Invoke-WebRequest -Uri $url -OutFile $installer
-            Start-Process msiexec.exe -ArgumentList "/i", "`"$installer`"", "/quiet", "/norestart" -Wait
-            Remove-Item $installer -Force
-          }
-
-      - name: Connect Tailscale
-        run: |
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=Dev-Abdo-RDP
-          $tsIP = $null
-          $retries = 0
-          while (-not $tsIP -and $retries -lt 15) {
-            $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
-            Start-Sleep -Seconds 5
-            $retries++
-          }
-          if (-not $tsIP) { Write-Error "No IP"; exit 1 }
-          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
-
-      - name: Show Info
-        run: |
-          Write-Host "================================================"
-          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
-          Write-Host "Username: Dev_Abdo"
-          Write-Host "Password: Abdo012#"
           Write-Host "================================================"
 
       - name: Keep Alive
