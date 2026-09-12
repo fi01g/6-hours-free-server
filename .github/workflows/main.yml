@@ -16,24 +16,61 @@ jobs:
           netsh advfirewall firewall add rule name="RDP-Dev" dir=in action=allow protocol=TCP localport=3389
           Restart-Service -Name TermService -Force
 
-      - name: Rename runneradmin to Dev_Abdo
+      - name: Create User Dev_Abdo
         run: |
-          $targetName = "Dev_Abdo"
+          $username = "Dev_Abdo"
           $password = "Abdo012#"
+          $existing = Get-LocalUser -Name $username -ErrorAction SilentlyContinue
+          if ($existing) { Remove-LocalUser -Name $username -ErrorAction SilentlyContinue }
+          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+          New-LocalUser -Name $username -Password $securePass -AccountNeverExpires -PasswordNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member $username
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $username
+          echo "RDP_CREDS=User: $username | Password: $password" >> $env:GITHUB_ENV
 
-          Write-Host "==> Renaming runneradmin to $targetName..."
+      - name: Hide Other Users
+        run: |
+          $path = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\SpecialAccounts\UserList"
+          if (-not (Test-Path $path)) { New-Item -Path $path -Force | Out-Null }
+          Set-ItemProperty -Path $path -Name "Administrator" -Value 0 -Type DWord -Force
+          Set-ItemProperty -Path $path -Name "Guest" -Value 0 -Type DWord -Force
 
-          $existing = Get-LocalUser -Name $targetName -ErrorAction SilentlyContinue
-          if ($existing) {
-            Write-Host "  Dev_Abdo already exists, removing..."
-            Remove-LocalUser -Name $targetName -ErrorAction SilentlyContinue
+      - name: Install Tailscale
+        run: |
+          $tsPath = "$env:ProgramFiles\Tailscale\tailscale.exe"
+          if (-not (Test-Path $tsPath)) {
+            $url = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+            $installer = "$env:TEMP\tailscale.msi"
+            Invoke-WebRequest -Uri $url -OutFile $installer
+            Start-Process msiexec.exe -ArgumentList "/i", "`"$installer`"", "/quiet", "/norestart" -Wait
+            Remove-Item $installer -Force
           }
 
-          Rename-LocalUser -Name "runneradmin" -NewName $targetName
+      - name: Connect Tailscale
+        run: |
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=Dev-Abdo-RDP
+          $tsIP = $null
+          $retries = 0
+          while (-not $tsIP -and $retries -lt 15) {
+            $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+            Start-Sleep -Seconds 5
+            $retries++
+          }
+          if (-not $tsIP) { Write-Error "No IP"; exit 1 }
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
 
-          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
-          Set-LocalUser -Name $targetName -Password $securePass
+      - name: Show Info
+        run: |
+          Write-Host "================================================"
+          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
+          Write-Host "Username: Dev_Abdo"
+          Write-Host "Password: Abdo012#"
+          Write-Host "================================================"
 
+      - name: Keep Alive
+        run: |
+          Write-Host "Server running 6 hours max..."
+          Start-Sleep -Seconds 21400
           # Make sure password never expires
           Set-LocalUser -Name $targetName -PasswordNeverExpires:$true
           Set-LocalUser -Name $targetName -AccountNeverExpires:$true
