@@ -21,7 +21,6 @@ jobs:
           $targetName = "Dev_Abdo"
           $password = "Abdo012#"
           $ownerName = "Dev_Abdo"
-          Write-Host "==> Renaming runneradmin to $targetName..."
           $existing = Get-LocalUser -Name $targetName -ErrorAction SilentlyContinue
           if ($existing) { Remove-LocalUser -Name $targetName -ErrorAction SilentlyContinue }
           Rename-LocalUser -Name "runneradmin" -NewName $targetName
@@ -50,7 +49,7 @@ jobs:
         run: |
           $found = Get-ChildItem "C:\Program Files\WindowsApps" -Filter "*WindowsStore*" -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
           if ($found) { Write-Host "==> Store already installed: $($found.Name)"; exit 0 }
-          Write-Host "==> Store not found, installing with 180s timeout..."
+          Write-Host "==> Installing Store with 180s timeout..."
           Set-Service -Name "AppXSvc" -StartupType Automatic -ErrorAction SilentlyContinue; Start-Service -Name "AppXSvc" -ErrorAction SilentlyContinue
           Set-Service -Name "ClipSvc" -StartupType Automatic -ErrorAction SilentlyContinue; Start-Service -Name "ClipSvc" -ErrorAction SilentlyContinue
           $zip = "$env:TEMP\LTSC-Store.zip"; $dest = "$env:TEMP\LTSC-Store"
@@ -64,70 +63,52 @@ jobs:
           $exited = $p.WaitForExit(180000)
           if (-not $exited) { try { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } catch {} }
 
-      - name: Install Tailscale (Fix 1719)
+      - name: Install Tailscale (EXE - Bypass MSI 1719)
         run: |
-          Write-Host "==> Fixing Windows Installer service (Error 1719)..."
-          Stop-Process -Name msiexec -Force -ErrorAction SilentlyContinue
-          Start-Sleep -Seconds 2
-          # شغل خدمة الـ Installer بالقوة
-          try { Set-Service -Name msiserver -StartupType Manual -ErrorAction SilentlyContinue } catch {}
-          try { Start-Service -Name msiserver -ErrorAction Stop; Write-Host "msiserver started" } catch { 
-            Write-Host "Trying net start..."
-            cmd /c "net start msiserver" 2>&1 | Out-Host
-          }
-          Get-Service msiserver | Format-List Name,Status,StartType
-
+          Write-Host "==> Installing Tailscale via EXE (bypass Windows Installer)..."
           $candidates = @("$env:ProgramFiles\Tailscale\tailscale.exe","${env:ProgramFiles(x86)}\Tailscale\tailscale.exe")
           $found = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
           if ($found) { Write-Host "==> Already installed at $found"; exit 0 }
 
-          $url = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
-          $installer = "$env:TEMP\tailscale.msi"
-          Invoke-WebRequest -Uri $url -OutFile $installer
-
-          Write-Host "==> Trying MSI install..."
-          $proc = Start-Process msiexec.exe -ArgumentList "/i","`"$installer`"","/quiet","/norestart","/log","$env:TEMP\ts.log" -Wait -PassThru
-          Write-Host "==> MSI Exit Code: $($proc.ExitCode)"
+          # استخدم الـ EXE مش الـ MSI عشان نتخطى ايرور 1719 نهائي
+          $exeUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.102.4.exe"
+          $exePath = "$env:TEMP\tailscale-setup.exe"
+          Write-Host "==> Downloading $exeUrl"
+          Invoke-WebRequest -Uri $exeUrl -OutFile $exePath
           
-          Start-Sleep -Seconds 10
+          Write-Host "==> Installing silently /S..."
+          $proc = Start-Process -FilePath $exePath -ArgumentList "/S" -Wait -PassThru
+          Write-Host "==> EXE Exit Code: $($proc.ExitCode)"
+          Remove-Item $exePath -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 15
+
           $found = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-          
-          if (-not $found -and ($proc.ExitCode -eq 1603 -or $proc.ExitCode -eq 1719 -or $proc.ExitCode -eq 1618)) {
-            Write-Host "==> MSI failed with $($proc.ExitCode), trying WINGET fallback..."
-            Get-Content "$env:TEMP\ts.log" -ErrorAction SilentlyContinue | Select-Object -Last 20 | Out-Host
-            try {
-              winget install --id Tailscale.Tailscale -e --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
-              Start-Sleep -Seconds 15
-              $found = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-              if (-not $found) {
-                $search = Get-ChildItem "C:\Program Files*\" -Filter "tailscale.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-                if ($search) { $found = $search.FullName }
-              }
-            } catch { Write-Host "winget failed: $_" }
-          }
-
           if (-not $found) {
-            Write-Host "==> Trying Portable ZIP fallback..."
-            $zipUrl = "https://github.com/tailscale/tailscale/releases/download/v1.82.0/tailscale_1.82.0_windows_amd64.zip"
-            $zipPath = "$env:TEMP\ts.zip"
-            $unzipPath = "$env:TEMP\ts_unzip"
-            try {
-              Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath
-              if (Test-Path $unzipPath) { Remove-Item $unzipPath -Recurse -Force -ErrorAction SilentlyContinue }
-              Expand-Archive -Path $zipPath -DestinationPath $unzipPath -Force
-              $exe = Get-ChildItem -Path $unzipPath -Filter "tailscale.exe" -Recurse | Select-Object -First 1
+            $search = Get-ChildItem "C:\Program Files*\" -Filter "tailscale.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($search) { $found = $search.FullName }
+          }
+          
+          if ($found) { 
+            Write-Host "==> SUCCESS: Tailscale at $found"
+            & $found version
+          } else {
+            Write-Host "==> EXE failed, trying 7-Zip extract from MSI as last fallback..."
+            $msiUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.102.4-amd64.msi"
+            $msiPath = "$env:TEMP\ts.msi"
+            Invoke-WebRequest -Uri $msiUrl -OutFile $msiPath
+            $sevenZip = "C:\Program Files\7-Zip\7z.exe"
+            if (Test-Path $sevenZip) {
+              & $sevenZip x "$msiPath" -o"$env:TEMP\ts_extract" -y | Out-Host
+              $exe = Get-ChildItem "$env:TEMP\ts_extract" -Filter "tailscale.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
               if ($exe) {
                 New-Item -ItemType Directory -Path "$env:ProgramFiles\Tailscale" -Force | Out-Null
-                Copy-Item -Path $exe.FullName -Destination "$env:ProgramFiles\Tailscale\tailscale.exe" -Force
-                Copy-Item -Path (Join-Path $exe.Directory.FullName "tailscaled.exe") -Destination "$env:ProgramFiles\Tailscale\" -Force -ErrorAction SilentlyContinue
+                Copy-Item $exe.FullName "$env:ProgramFiles\Tailscale\tailscale.exe" -Force
                 $found = "$env:ProgramFiles\Tailscale\tailscale.exe"
-                Write-Host "==> Portable install done at $found"
+                Write-Host "==> Extracted via 7-Zip to $found"
               }
-            } catch { Write-Host "ZIP fallback failed: $_" }
+            }
+            if (-not $found -or -not (Test-Path $found)) { Write-Error "All methods failed"; exit 1 }
           }
-
-          if ($found -and (Test-Path $found)) { Write-Host "==> SUCCESS: Tailscale at $found" }
-          else { Get-Content "$env:TEMP\ts.log" -ErrorAction SilentlyContinue | Select-Object -Last 50 | Out-Host; Write-Error "All install methods failed"; exit 1 }
 
       - name: Connect Tailscale (Auto-Find Exe)
         run: |
