@@ -87,7 +87,6 @@ jobs:
             Set-Service -Name "ClipSvc" -StartupType Automatic -ErrorAction SilentlyContinue
             Write-Host "==> AppX services enabled."
 
-
       - name: Install Tailscale
         run: |
           $tsPath = "$env:ProgramFiles\Tailscale\tailscale.exe"
@@ -95,7 +94,7 @@ jobs:
             $url = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
             $installer = "$env:TEMP\tailscale.msi"
             Invoke-WebRequest -Uri $url -OutFile $installer
-            Start-Process msiexec.exe -ArgumentList "/i", "`"$installer`"", "/quiet", "/norestart" -Wait
+            Start-Process msiexec.exe -ArgumentList "/i", ""$installer"", "/quiet", "/norestart" -Wait
             Remove-Item $installer -Force
           }
 
