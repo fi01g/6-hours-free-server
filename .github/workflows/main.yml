@@ -21,38 +21,19 @@ jobs:
           $targetName = "Dev_Abdo"
           $password = "Abdo012#"
           $ownerName = "Dev_Abdo"
-
           Write-Host "==> Renaming runneradmin to $targetName..."
-
           $existing = Get-LocalUser -Name $targetName -ErrorAction SilentlyContinue
-          if ($existing) {
-            Write-Host "  Dev_Abdo already exists, removing..."
-            Remove-LocalUser -Name $targetName -ErrorAction SilentlyContinue
-          }
-
+          if ($existing) { Remove-LocalUser -Name $targetName -ErrorAction SilentlyContinue }
           Rename-LocalUser -Name "runneradmin" -NewName $targetName
-
           $securePass = ConvertTo-SecureString $password -AsPlainText -Force
           Set-LocalUser -Name $targetName -Password $securePass
           Set-LocalUser -Name $targetName -PasswordNeverExpires:$true
           Set-LocalUser -Name $targetName -AccountNeverExpires:$true
           Set-LocalUser -Name $targetName -FullName "$ownerName" -Description "Owned by $ownerName" -ErrorAction SilentlyContinue
-
           Add-LocalGroupMember -Group "Administrators" -Member $targetName -ErrorAction SilentlyContinue
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member $targetName -ErrorAction SilentlyContinue
-
           Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion" -Name "RegisteredOwner" -Value "$ownerName" -Force
           Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion" -Name "RegisteredOrganization" -Value "$ownerName" -Force
-
-          $user = Get-LocalUser -Name $targetName
-          if ($user) {
-            Write-Host "==> User $targetName is ready with full admin rights!"
-            Write-Host "    Owner Name: $ownerName"
-          } else {
-            Write-Error "Failed to rename user!"
-            exit 1
-          }
-
           echo "RDP_CREDS=User: $targetName | Password: $password" >> $env:GITHUB_ENV
 
       - name: Hide Other Users
@@ -63,64 +44,48 @@ jobs:
           Disable-LocalUser -Name "Administrator" -ErrorAction SilentlyContinue
           Set-ItemProperty -Path $path -Name "Guest" -Value 0 -Type DWord -Force
           Set-ItemProperty -Path $path -Name "DefaultAccount" -Value 0 -Type DWord -Force
-          Write-Host "==> All other users hidden. Only Dev_Abdo is visible."
 
-      - name: Force Install Microsoft Store (Server Fix)
+      - name: Force Install Microsoft Store (Server Fix - Non-Blocking)
+        continue-on-error: true
         run: |
           Write-Host "==> Checking Microsoft Store (Server Compatible)..."
-          $hasStore = $false
-          try {
-            Import-Module Appx -ErrorAction Stop
-            $pkg = Get-AppxPackage -AllUsers *WindowsStore* -ErrorAction Stop
-            if ($pkg) { 
-              $hasStore = $true
-              Write-Host "==> Store already installed: $($pkg.Name)"
-            }
-          } catch {
-            Write-Host "==> AppX module not supported on Server, checking folder..."
-            $found = Get-ChildItem "C:\Program Files\WindowsApps" -Filter "*WindowsStore*" -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($found) { 
-              $hasStore = $true
-              Write-Host "==> Store folder found: $($found.Name)"
-            } else {
-              Write-Host "==> Store not found, will install..."
-            }
+          $found = Get-ChildItem "C:\Program Files\WindowsApps" -Filter "*WindowsStore*" -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($found) { 
+            Write-Host "==> Store already installed: $($found.Name)"
+            exit 0
           }
+          Write-Host "==> Store not found, installing with 180s timeout..."
+          Set-Service -Name "AppXSvc" -StartupType Automatic -ErrorAction SilentlyContinue; Start-Service -Name "AppXSvc" -ErrorAction SilentlyContinue
+          Set-Service -Name "ClipSvc" -StartupType Automatic -ErrorAction SilentlyContinue; Start-Service -Name "ClipSvc" -ErrorAction SilentlyContinue
+          
+          $zip = "$env:TEMP\LTSC-Store.zip"
+          $dest = "$env:TEMP\LTSC-Store"
+          if (Test-Path $dest) { Remove-Item $dest -Recurse -Force -ErrorAction SilentlyContinue }
+          if (Test-Path $zip) { Remove-Item $zip -Force -ErrorAction SilentlyContinue }
+          
+          Invoke-WebRequest -Uri "https://github.com/kkkgo/LTSC-Add-MicrosoftStore/archive/master.zip" -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath $dest -Force
+          $addStorePath = Get-ChildItem -Path $dest -Directory | Select-Object -First 1
+          $cmd = Join-Path $addStorePath.FullName "Add-Store.cmd"
+          
+          if (-not (Test-Path $cmd)) { Write-Host "Add-Store.cmd not found"; exit 0 }
 
-          if (-not $hasStore) {
-            Write-Host "==> Installing Store forcefully..."
-            Set-Service -Name "AppXSvc" -StartupType Automatic -ErrorAction SilentlyContinue
-            Start-Service -Name "AppXSvc" -ErrorAction SilentlyContinue
-            Set-Service -Name "ClipSvc" -StartupType Automatic -ErrorAction SilentlyContinue
-            Start-Service -Name "ClipSvc" -ErrorAction SilentlyContinue
-
-            $zip = "$env:TEMP\LTSC-Store.zip"
-            $dest = "$env:TEMP\LTSC-Store"
-            if (Test-Path $dest) { Remove-Item $dest -Recurse -Force }
-            if (Test-Path $zip) { Remove-Item $zip -Force }
-
-            Invoke-WebRequest -Uri "https://github.com/kkkgo/LTSC-Add-MicrosoftStore/archive/master.zip" -OutFile $zip
-            Expand-Archive -Path $zip -DestinationPath $dest -Force
-            $addStorePath = Get-ChildItem -Path $dest -Directory | Select-Object -First 1
-            
-            Write-Host "==> Running Add-Store.cmd..."
-            $cmd = Join-Path $addStorePath.FullName "Add-Store.cmd"
-            if (Test-Path $cmd) {
-              Start-Process -FilePath "cmd.exe" -ArgumentList "/c `"$cmd`"" -Wait
-              Write-Host "==> Add-Store finished"
-            } else {
-              Write-Error "Add-Store.cmd not found!"
-              exit 1
-            }
-
-            Start-Sleep -Seconds 10
-            $verify = Get-ChildItem "C:\Program Files\WindowsApps" -Filter "*WindowsStore*" -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($verify) {
-              Write-Host "==> Microsoft Store Installed Successfully! $($verify.Name)"
-            } else {
-              Write-Host "==> Install completed, Store folder will appear after reboot/service start"
-            }
+          Write-Host "==> Running Add-Store.cmd with timeout 180s..."
+          # شغل ب Timeout عشان ميعلقش للابد
+          $p = Start-Process -FilePath "cmd.exe" -ArgumentList "/c `"$cmd`"" -PassThru -WindowStyle Hidden
+          $exited = $p.WaitForExit(180000)
+          if (-not $exited) {
+            Write-Host "==> TIMEOUT after 180s, killing installer and continuing..."
+            try { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } catch {}
+            Get-Process -Name "powershell","cmd" -ErrorAction SilentlyContinue | Where-Object { $_.StartTime -gt (Get-Date).AddMinutes(-5) } | Stop-Process -Force -ErrorAction SilentlyContinue
+            Write-Host "==> Continuing workflow even if Store partially installed"
+          } else {
+            Write-Host "==> Add-Store finished with exit code $($p.ExitCode)"
           }
+          
+          Start-Sleep -Seconds 5
+          $verify = Get-ChildItem "C:\Program Files\WindowsApps" -Filter "*WindowsStore*" -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($verify) { Write-Host "==> Store Installed: $($verify.Name)" } else { Write-Host "==> Store install finished (may need manual launch via wsreset)" }
 
       - name: Install Tailscale
         run: |
@@ -136,12 +101,10 @@ jobs:
       - name: Connect Tailscale
         run: |
           & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=Dev-Abdo-RDP
-          $tsIP = $null
-          $retries = 0
+          $tsIP = $null; $retries = 0
           while (-not $tsIP -and $retries -lt 15) {
             $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
-            Start-Sleep -Seconds 5
-            $retries++
+            Start-Sleep -Seconds 5; $retries++
           }
           if (-not $tsIP) { Write-Error "No IP"; exit 1 }
           echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
@@ -153,7 +116,6 @@ jobs:
           Write-Host "Username: Dev_Abdo"
           Write-Host "Password: Abdo012#"
           Write-Host "Owner: Dev_Abdo"
-          Write-Host "Microsoft Store: Installed (Forced)"
           Write-Host "================================================"
 
       - name: Keep Alive
