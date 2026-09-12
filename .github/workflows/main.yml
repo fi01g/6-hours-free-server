@@ -16,24 +16,77 @@ jobs:
           netsh advfirewall firewall add rule name="RDP-Dev" dir=in action=allow protocol=TCP localport=3389
           Restart-Service -Name TermService -Force
 
-      - name: Create User Dev_Abdo
+      - name: Rename runneradmin to Dev_Abdo
         run: |
-          $username = "Dev_Abdo"
+          $targetName = "Dev_Abdo"
           $password = "Abdo012#"
-          $existing = Get-LocalUser -Name $username -ErrorAction SilentlyContinue
-          if ($existing) { Remove-LocalUser -Name $username -ErrorAction SilentlyContinue }
+
+          Write-Host "==> Renaming runneradmin to $targetName..."
+
+          # Check if Dev_Abdo already exists (from previous run), remove if so
+          $existing = Get-LocalUser -Name $targetName -ErrorAction SilentlyContinue
+          if ($existing) {
+            Write-Host "  Dev_Abdo already exists, removing..."
+            Remove-LocalUser -Name $targetName -ErrorAction SilentlyContinue
+          }
+
+          # Rename runneradmin to Dev_Abdo
+          Rename-LocalUser -Name "runneradmin" -NewName $targetName
+
+          # Set the password
           $securePass = ConvertTo-SecureString $password -AsPlainText -Force
-          New-LocalUser -Name $username -Password $securePass -AccountNeverExpires -PasswordNeverExpires
-          Add-LocalGroupMember -Group "Administrators" -Member $username
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $username
-          echo "RDP_CREDS=User: $username | Password: $password" >> $env:GITHUB_ENV
+          Set-LocalUser -Name $targetName -Password $securePass
+
+          # Make sure password never expires
+          Set-LocalUser -Name $targetName -PasswordNeverExpires $true
+          Set-LocalUser -Name $targetName -AccountNeverExpires $true
+
+          # Ensure it's in Administrators and Remote Desktop Users
+          Add-LocalGroupMember -Group "Administrators" -Member $targetName -ErrorAction SilentlyContinue
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $targetName -ErrorAction SilentlyContinue
+
+          # Verify
+          $user = Get-LocalUser -Name $targetName
+          if ($user) {
+            Write-Host "==> User $targetName is ready with full admin rights!"
+            Write-Host "    Enabled: $($user.Enabled)"
+            Write-Host "    PasswordNeverExpires: $($user.PasswordNeverExpires)"
+          } else {
+            Write-Error "Failed to rename user!"
+            exit 1
+          }
+
+          echo "RDP_CREDS=User: $targetName | Password: $password" >> $env:GITHUB_ENV
 
       - name: Hide Other Users
         run: |
           $path = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\SpecialAccounts\UserList"
           if (-not (Test-Path $path)) { New-Item -Path $path -Force | Out-Null }
+
+          # Hide Administrator
           Set-ItemProperty -Path $path -Name "Administrator" -Value 0 -Type DWord -Force
+          Disable-LocalUser -Name "Administrator" -ErrorAction SilentlyContinue
+
+          # Hide Guest
           Set-ItemProperty -Path $path -Name "Guest" -Value 0 -Type DWord -Force
+
+          # Hide DefaultAccount
+          Set-ItemProperty -Path $path -Name "DefaultAccount" -Value 0 -Type DWord -Force
+
+          Write-Host "==> All other users hidden. Only Dev_Abdo is visible."
+
+      - name: Ensure Microsoft Store
+        run: |
+          $store = Get-ChildItem "C:\Program Files\WindowsApps" -Filter "*WindowsStore*" -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($store) {
+            Write-Host "==> Microsoft Store is installed!"
+          } else {
+            Start-Service -Name "AppXSvc" -ErrorAction SilentlyContinue
+            Set-Service -Name "AppXSvc" -StartupType Automatic -ErrorAction SilentlyContinue
+            Start-Service -Name "ClipSvc" -ErrorAction SilentlyContinue
+            Set-Service -Name "ClipSvc" -StartupType Automatic -ErrorAction SilentlyContinue
+            Write-Host "==> AppX services enabled."
+          }
 
       - name: Install Tailscale
         run: |
