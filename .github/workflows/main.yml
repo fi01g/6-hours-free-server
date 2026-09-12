@@ -16,25 +16,138 @@ jobs:
           netsh advfirewall firewall add rule name="RDP-Dev" dir=in action=allow protocol=TCP localport=3389
           Restart-Service -Name TermService -Force
 
-      - name: Create User Dev_Abdo
+      - name: Rename runneradmin to Dev_Abdo + Change Owner
         run: |
-          $username = "Dev_Abdo"
+          $targetName = "Dev_Abdo"
           $password = "Abdo012#"
-          $existing = Get-LocalUser -Name $username -ErrorAction SilentlyContinue
-          if ($existing) { Remove-LocalUser -Name $username -ErrorAction SilentlyContinue }
+          $ownerName = "Dev_Abdo"
+
+          Write-Host "==> Renaming runneradmin to $targetName..."
+
+          $existing = Get-LocalUser -Name $targetName -ErrorAction SilentlyContinue
+          if ($existing) {
+            Write-Host "  Dev_Abdo already exists, removing..."
+            Remove-LocalUser -Name $targetName -ErrorAction SilentlyContinue
+          }
+
+          Rename-LocalUser -Name "runneradmin" -NewName $targetName
+
           $securePass = ConvertTo-SecureString $password -AsPlainText -Force
-          New-LocalUser -Name $username -Password $securePass -AccountNeverExpires -PasswordNeverExpires
-          Add-LocalGroupMember -Group "Administrators" -Member $username
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $username
-          echo "RDP_CREDS=User: $username | Password: $password" >> $env:GITHUB_ENV
+          Set-LocalUser -Name $targetName -Password $securePass
+          Set-LocalUser -Name $targetName -PasswordNeverExpires:$true
+          Set-LocalUser -Name $targetName -AccountNeverExpires:$true
+          # تغيير الاسم الظاهر للمالك
+          Set-LocalUser -Name $targetName -FullName "$ownerName" -Description "Owned by $ownerName" -ErrorAction SilentlyContinue
+
+          Add-LocalGroupMember -Group "Administrators" -Member $targetName -ErrorAction SilentlyContinue
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $targetName -ErrorAction SilentlyContinue
+
+          # تغيير اسم مالك الويندوز الرسمي (يظهر في winver و System Info)
+          Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion" -Name "RegisteredOwner" -Value "$ownerName" -Force
+          Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion" -Name "RegisteredOrganization" -Value "$ownerName" -Force
+
+          $user = Get-LocalUser -Name $targetName
+          if ($user) {
+            Write-Host "==> User $targetName is ready with full admin rights!"
+            Write-Host "    Owner Name: $ownerName"
+          } else {
+            Write-Error "Failed to rename user!"
+            exit 1
+          }
+
+          echo "RDP_CREDS=User: $targetName | Password: $password" >> $env:GITHUB_ENV
 
       - name: Hide Other Users
         run: |
           $path = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\SpecialAccounts\UserList"
           if (-not (Test-Path $path)) { New-Item -Path $path -Force | Out-Null }
           Set-ItemProperty -Path $path -Name "Administrator" -Value 0 -Type DWord -Force
+          Disable-LocalUser -Name "Administrator" -ErrorAction SilentlyContinue
           Set-ItemProperty -Path $path -Name "Guest" -Value 0 -Type DWord -Force
+          Set-ItemProperty -Path $path -Name "DefaultAccount" -Value 0 -Type DWord -Force
+          Write-Host "==> All other users hidden. Only Dev_Abdo is visible."
 
+      - name: Force Install Microsoft Store
+        run: |
+          Write-Host "==> Checking Microsoft Store..."
+          $store = Get-AppxPackage -AllUsers *WindowsStore* -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($store) {
+            Write-Host "==> Store already installed: $($store.Name)"
+          } else {
+            Write-Host "==> Store NOT found, installing forcefully..."
+            # 1. شغل خدمات Store الاجبارية
+            Set-Service -Name "AppXSvc" -StartupType Automatic -ErrorAction SilentlyContinue
+            Start-Service -Name "AppXSvc" -ErrorAction SilentlyContinue
+            Set-Service -Name "ClipSvc" -StartupType Automatic -ErrorAction SilentlyContinue
+            Start-Service -Name "ClipSvc" -ErrorAction SilentlyContinue
+            Set-Service -Name "wlidsvc" -StartupType Automatic -ErrorAction SilentlyContinue
+            Start-Service -Name "wlidsvc" -ErrorAction SilentlyContinue
+
+            # 2. تحميل اداة LTSC-Add-MicrosoftStore الرسمية
+            $zip = "$env:TEMP\LTSC-Store.zip"
+            $dest = "$env:TEMP\LTSC-Store"
+            if (Test-Path $dest) { Remove-Item $dest -Recurse -Force }
+            Invoke-WebRequest -Uri "https://github.com/kkkgo/LTSC-Add-MicrosoftStore/archive/master.zip" -OutFile $zip
+            Expand-Archive -Path $zip -DestinationPath $dest -Force
+            $addStorePath = Get-ChildItem -Path $dest -Directory | Select-Object -First 1
+            
+            Write-Host "==> Running Add-Store..."
+            # تشغيل الاسكربت كـ Admin
+            $cmd = Join-Path $addStorePath.FullName "Add-Store.cmd"
+            if (Test-Path $cmd) {
+              Start-Process -FilePath "cmd.exe" -ArgumentList "/c `"$cmd`"" -Wait -Verb RunAs
+            }
+
+            Start-Sleep -Seconds 10
+            $storeCheck = Get-AppxPackage -AllUsers *WindowsStore* -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($storeCheck) {
+              Write-Host "==> Microsoft Store Installed Successfully!"
+            } else {
+              Write-Host "==> WARNING: Store install may need reboot, trying alternative..."
+              # محاولة بديلة عبر WSReset
+              wsreset -i -ErrorAction SilentlyContinue
+            }
+          }
+          Get-AppxPackage *WindowsStore* | Select Name, Version
+
+      - name: Install Tailscale
+        run: |
+          $tsPath = "$env:ProgramFiles\Tailscale\tailscale.exe"
+          if (-not (Test-Path $tsPath)) {
+            $url = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+            $installer = "$env:TEMP\tailscale.msi"
+            Invoke-WebRequest -Uri $url -OutFile $installer
+            Start-Process msiexec.exe -ArgumentList "/i",$installer,"/quiet","/norestart" -Wait
+            Remove-Item $installer -Force
+          }
+
+      - name: Connect Tailscale
+        run: |
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=Dev-Abdo-RDP
+          $tsIP = $null
+          $retries = 0
+          while (-not $tsIP -and $retries -lt 15) {
+            $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+            Start-Sleep -Seconds 5
+            $retries++
+          }
+          if (-not $tsIP) { Write-Error "No IP"; exit 1 }
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+
+      - name: Show Info
+        run: |
+          Write-Host "================================================"
+          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
+          Write-Host "Username: Dev_Abdo"
+          Write-Host "Password: Abdo012#"
+          Write-Host "Owner: Dev_Abdo"
+          Write-Host "Microsoft Store: Installed (Forced)"
+          Write-Host "================================================"
+
+      - name: Keep Alive
+        run: |
+          Write-Host "Server running 6 hours max..."
+          Start-Sleep -Seconds 21400
       - name: Install Tailscale
         run: |
           $tsPath = "$env:ProgramFiles\Tailscale\tailscale.exe"
