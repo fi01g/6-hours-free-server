@@ -38,8 +38,8 @@ jobs:
           Set-LocalUser -Name $targetName -Password $securePass
 
           # Make sure password never expires
-          Set-LocalUser -Name $targetName -PasswordNeverExpires $true
-          Set-LocalUser -Name $targetName -AccountNeverExpires $true
+          Set-LocalUser -Name $targetName -PasswordNeverExpires : $true
+          Set-LocalUser -Name $targetName -AccountNeverExpires : $true
 
           # Ensure it's in Administrators and Remote Desktop Users
           Add-LocalGroupMember -Group "Administrators" -Member $targetName -ErrorAction SilentlyContinue
