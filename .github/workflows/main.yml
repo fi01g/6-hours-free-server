@@ -1,39 +1,120 @@
-name: FREE RDP BY DEV ABDULRAHMAN
+name: Windows Server 2022 RDP - Dev_Abdo
 
 on:
   workflow_dispatch:
 
 jobs:
   secure-rdp:
-    runs-on: windows-latest 
-    timeout-minutes: 3600
-
+    runs-on: windows-2022
+    timeout-minutes: 360
     steps:
-      - name: Configure Core RDP Settings
+      - name: Enable RDP
         run: |
-          # Enable Remote Desktop and disable Network Level Authentication (if needed)
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
-                             -Name "fDenyTSConnections" -Value 0 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
-                             -Name "UserAuthentication" -Value 0 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
-                             -Name "SecurityLayer" -Value 0 -Force
-
-          # Remove any existing rule with the same name to avoid duplication
-          netsh advfirewall firewall delete rule name="RDP-Tailscale"
-          
-          # For testing, allow any incoming connection on port 3389
-          netsh advfirewall firewall add rule name="RDP-Tailscale" `
-            dir=in action=allow protocol=TCP localport=3389
-
-          # (Optional) Restart the Remote Desktop service to ensure changes take effect
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
+          netsh advfirewall firewall delete rule name="RDP-Dev" 2>$null
+          netsh advfirewall firewall add rule name="RDP-Dev" dir=in action=allow protocol=TCP localport=3389
           Restart-Service -Name TermService -Force
 
-      - name: Create RDP User with Custom Password
+      - name: Create User Dev_Abdo
         run: |
-          # Set Custom Credentials
+          $username = "Dev_Abdo"
           $password = "Abdo012#"
+          $existing = Get-LocalUser -Name $username -ErrorAction SilentlyContinue
+          if ($existing) { Remove-LocalUser -Name $username -ErrorAction SilentlyContinue }
           $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+          New-LocalUser -Name $username -Password $securePass -AccountNeverExpires -PasswordNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member $username
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $username
+          echo "RDP_CREDS=User: $username | Password: $password" >> $env:GITHUB_ENV
+
+      - name: Disable and Hide Other Users
+        run: |
+          $path = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\SpecialAccounts\UserList"
+          if (-not (Test-Path $path)) { New-Item -Path $path -Force | Out-Null }
+
+          # Hide runneradmin
+          Set-ItemProperty -Path $path -Name "runneradmin" -Value 0 -Type DWord -Force
+          Disable-LocalUser -Name "runneradmin" -ErrorAction SilentlyContinue
+
+          # Hide Administrator
+          Set-ItemProperty -Path $path -Name "Administrator" -Value 0 -Type DWord -Force
+          Disable-LocalUser -Name "Administrator" -ErrorAction SilentlyContinue
+
+          # Hide Guest
+          Set-ItemProperty -Path $path -Name "Guest" -Value 0 -Type DWord -Force
+
+          # Hide DefaultAccount
+          Set-ItemProperty -Path $path -Name "DefaultAccount" -Value 0 -Type DWord -Force
+
+          Write-Host "==> All other users hidden/disabled. Only Dev_Abdo will be visible."
+
+      - name: Ensure Microsoft Store is Installed
+        run: |
+          Write-Host "==> Checking Microsoft Store..."
+
+          # Check if Microsoft Store is installed
+          $store = Get-ChildItem "C:\Program Files\WindowsApps" -Filter "*WindowsStore*" -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
+
+          if ($store) {
+            Write-Host "==> Microsoft Store is INSTALLED!"
+            Write-Host "    Location: $($store.FullName)"
+          } else {
+            Write-Host "==> Microsoft Store not found, attempting to enable..."
+            # Make sure AppX services are running
+            Start-Service -Name "AppXSvc" -ErrorAction SilentlyContinue
+            Set-Service -Name "AppXSvc" -StartupType Automatic -ErrorAction SilentlyContinue
+            Start-Service -Name "ClipSvc" -ErrorAction SilentlyContinue
+            Set-Service -Name "ClipSvc" -StartupType Automatic -ErrorAction SilentlyContinue
+            Write-Host "==> AppX services enabled."
+          }
+
+          # Check Store app status
+          $storeApp = Get-AppxPackage -Name "*WindowsStore*" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($storeApp) {
+            Write-Host "==> Store App Package: $($storeApp.Name)"
+            Write-Host "==> Version: $($storeApp.Version)"
+          } else {
+            Write-Host "==> Store app package not registered, will be available at first login."
+          }
+
+      - name: Install Tailscale
+        run: |
+          $tsPath = "$env:ProgramFiles\Tailscale\tailscale.exe"
+          if (-not (Test-Path $tsPath)) {
+            $url = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+            $installer = "$env:TEMP\tailscale.msi"
+            Invoke-WebRequest -Uri $url -OutFile $installer
+            Start-Process msiexec.exe -ArgumentList "/i", "`"$installer`"", "/quiet", "/norestart" -Wait
+            Remove-Item $installer -Force
+          }
+
+      - name: Connect Tailscale
+        run: |
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=Dev-Abdo-RDP
+          $tsIP = $null
+          $retries = 0
+          while (-not $tsIP -and $retries -lt 15) {
+            $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+            Start-Sleep -Seconds 5
+            $retries++
+          }
+          if (-not $tsIP) { Write-Error "No IP"; exit 1 }
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+
+      - name: Show Info
+        run: |
+          Write-Host "================================================"
+          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
+          Write-Host "Username: Dev_Abdo"
+          Write-Host "Password: Abdo012#"
+          Write-Host "Microsoft Store: Enabled in Start Menu"
+          Write-Host "================================================"
+
+      - name: Keep Alive
+        run: |
+          Write-Host "Server running 6 hours max..."
+          Start-Sleep -Seconds 21400
           
           New-LocalUser -Name "DEV" -Password $securePass -AccountNeverExpires
           Add-LocalGroupMember -Group "Administrators" -Member "DEV"
