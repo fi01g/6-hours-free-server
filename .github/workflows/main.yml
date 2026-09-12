@@ -1,5 +1,4 @@
 name: Windows Server 2022 RDP - Dev_Abdo
-
 on:
   workflow_dispatch:
 
@@ -9,6 +8,7 @@ jobs:
     timeout-minutes: 360
     steps:
       - name: Enable RDP
+        shell: powershell
         run: |
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
@@ -17,24 +17,106 @@ jobs:
           Restart-Service -Name TermService -Force
 
       - name: Rename runneradmin to Dev_Abdo
+        shell: powershell
         run: |
           $targetName = "Dev_Abdo"
           $password = "Abdo012#"
-
           Write-Host "==> Renaming runneradmin to $targetName..."
-
           $existing = Get-LocalUser -Name $targetName -ErrorAction SilentlyContinue
           if ($existing) {
             Write-Host "  Dev_Abdo already exists, removing..."
             Remove-LocalUser -Name $targetName -ErrorAction SilentlyContinue
           }
-
           Rename-LocalUser -Name "runneradmin" -NewName $targetName
-
           $securePass = ConvertTo-SecureString $password -AsPlainText -Force
           Set-LocalUser -Name $targetName -Password $securePass
+          # إصلاح: Switch بدون قيمة
+          Set-LocalUser -Name $targetName -PasswordNeverExpires
+          # إصلاح بديل لـ AccountNeverExpires
+          try { Set-LocalUser -Name $targetName -AccountNeverExpires } catch { net user $targetName /expires:never }
 
-          # Make sure password never expires
+          Add-LocalGroupMember -Group "Administrators" -Member $targetName -ErrorAction SilentlyContinue
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $targetName -ErrorAction SilentlyContinue
+          
+          $user = Get-LocalUser -Name $targetName
+          if (-not $user) { Write-Error "Failed to rename user!"; exit 1 }
+          Write-Host "==> User $targetName is ready!"
+          # إصلاح: طريقة PowerShell الصحيحة للكتابة في GITHUB_ENV
+          "RDP_CREDS=User: $targetName | Password: $password" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Hide Other Users
+        shell: powershell
+        run: |
+          $path = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\SpecialAccounts\UserList"
+          if (-not (Test-Path $path)) { New-Item -Path $path -Force | Out-Null }
+          Set-ItemProperty -Path $path -Name "Administrator" -Value 0 -Type DWord -Force
+          Disable-LocalUser -Name "Administrator" -ErrorAction SilentlyContinue
+          Set-ItemProperty -Path $path -Name "Guest" -Value 0 -Type DWord -Force
+          Set-ItemProperty -Path $path -Name "DefaultAccount" -Value 0 -Type DWord -Force
+          Write-Host "==> Only Dev_Abdo is visible."
+
+      - name: Ensure Microsoft Store
+        shell: powershell
+        run: |
+          $store = Get-ChildItem "C:\Program Files\WindowsApps" -Filter "*WindowsStore*" -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($store) {
+            Write-Host "==> Microsoft Store is installed!"
+          } else {
+            Start-Service -Name "AppXSvc" -ErrorAction SilentlyContinue
+            Set-Service -Name "AppXSvc" -StartupType Automatic -ErrorAction SilentlyContinue
+            Start-Service -Name "ClipSvc" -ErrorAction SilentlyContinue
+            Set-Service -Name "ClipSvc" -StartupType Automatic -ErrorAction SilentlyContinue
+          }
+
+      - name: Install Tailscale
+        shell: powershell
+        run: |
+          $tsPath = "$env:ProgramFiles\Tailscale\tailscale.exe"
+          if (-not (Test-Path $tsPath)) {
+            $url = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+            $installer = "$env:TEMP\tailscale.msi"
+            Invoke-WebRequest -Uri $url -OutFile $installer
+            # إصلاح: ArgumentList كـ String واحد
+            Start-Process msiexec.exe -ArgumentList "/i `"$installer`" /quiet /norestart" -Wait
+            Remove-Item $installer -Force
+          }
+
+      - name: Connect Tailscale
+        shell: powershell
+        env:
+          TS_AUTHKEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
+        run: |
+          if (-not $env:TS_AUTHKEY) { Write-Error "TAILSCALE_AUTH_KEY is missing!"; exit 1 }
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=$env:TS_AUTHKEY --hostname=Dev-Abdo-RDP
+          $tsIP = $null
+          $retries = 0
+          while (-not $tsIP -and $retries -lt 15) {
+            $tsIP = (& "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4 2>$null | Select-Object -First 1).Trim()
+            if (-not $tsIP) { Start-Sleep -Seconds 5; $retries++ }
+          }
+          if (-not $tsIP) { Write-Error "Failed to get Tailscale IP"; exit 1 }
+          Write-Host "Tailscale IP: $tsIP"
+          # إصلاح: PowerShell
+          "TAILSCALE_IP=$tsIP" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Show Info
+        shell: powershell
+        run: |
+          Write-Host "================================================"
+          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
+          Write-Host "Username: Dev_Abdo"
+          Write-Host "Password: Abdo012#"
+          Write-Host "================================================"
+
+      - name: Keep Alive
+        shell: powershell
+        run: |
+          Write-Host "Server running 6 hours max..."
+          # الأفضل loop مع heartbeat عشان الجوب ميبانش hang
+          for ($i=0; $i -lt 357; $i++) {
+            Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Running... $($i+1)/357 min - IP: $env:TAILSCALE_IP"
+            Start-Sleep -Seconds 60
+          }          # Make sure password never expires
           Set-LocalUser -Name $targetName -PasswordNeverExpires:$true
           Set-LocalUser -Name $targetName -AccountNeverExpires:$true
 
