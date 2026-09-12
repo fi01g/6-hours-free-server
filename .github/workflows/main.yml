@@ -50,6 +50,122 @@ jobs:
         run: |
           Write-Host "==> Checking Microsoft Store (Server Compatible)..."
           $found = Get-ChildItem "C:\Program Files\WindowsApps" -Filter "*WindowsStore*" -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($found) { Write-Host "==> Store already installed: $($found.Name)"; exit 0 }
+          Write-Host "==> Store not found, installing with 180s timeout..."
+          Set-Service -Name "AppXSvc" -StartupType Automatic -ErrorAction SilentlyContinue; Start-Service -Name "AppXSvc" -ErrorAction SilentlyContinue
+          Set-Service -Name "ClipSvc" -StartupType Automatic -ErrorAction SilentlyContinue; Start-Service -Name "ClipSvc" -ErrorAction SilentlyContinue
+          $zip = "$env:TEMP\LTSC-Store.zip"; $dest = "$env:TEMP\LTSC-Store"
+          if (Test-Path $dest) { Remove-Item $dest -Recurse -Force -ErrorAction SilentlyContinue }
+          if (Test-Path $zip) { Remove-Item $zip -Force -ErrorAction SilentlyContinue }
+          Invoke-WebRequest -Uri "https://github.com/kkkgo/LTSC-Add-MicrosoftStore/archive/master.zip" -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath $dest -Force
+          $addStorePath = Get-ChildItem -Path $dest -Directory | Select-Object -First 1
+          $cmd = Join-Path $addStorePath.FullName "Add-Store.cmd"
+          if (-not (Test-Path $cmd)) { Write-Host "Add-Store.cmd not found"; exit 0 }
+          Write-Host "==> Running Add-Store.cmd with timeout 180s..."
+          $p = Start-Process -FilePath "cmd.exe" -ArgumentList "/c `"$cmd`"" -PassThru -WindowStyle Hidden
+          $exited = $p.WaitForExit(180000)
+          if (-not $exited) {
+            Write-Host "==> TIMEOUT after 180s, killing installer and continuing..."
+            try { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } catch {}
+            Get-Process -Name "powershell","cmd" -ErrorAction SilentlyContinue | Where-Object { $_.StartTime -gt (Get-Date).AddMinutes(-5) } | Stop-Process -Force -ErrorAction SilentlyContinue
+          } else { Write-Host "==> Add-Store finished with exit code $($p.ExitCode)" }
+          Start-Sleep -Seconds 5
+          $verify = Get-ChildItem "C:\Program Files\WindowsApps" -Filter "*WindowsStore*" -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($verify) { Write-Host "==> Store Installed: $($verify.Name)" } else { Write-Host "==> Store install finished" }
+
+      - name: Install Tailscale (Fixed Path)
+        run: |
+          # دور على tailscale في كل الاماكن المحتملة
+          $candidates = @(
+            "$env:ProgramFiles\Tailscale\tailscale.exe",
+            "${env:ProgramFiles(x86)}\Tailscale\tailscale.exe",
+            "$env:ProgramFiles\Tailscale\tailscaled.exe"
+          )
+          $found = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if ($found) { Write-Host "==> Tailscale already installed at $found"; exit 0 }
+
+          Write-Host "==> Installing Tailscale..."
+          $url = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+          $installer = "$env:TEMP\tailscale.msi"
+          Invoke-WebRequest -Uri $url -OutFile $installer
+          
+          Write-Host "==> Running MSI..."
+          $proc = Start-Process msiexec.exe -ArgumentList "/i","`"$installer`"","/quiet","/norestart","/log","$env:TEMP\tailscale_install.log" -Wait -PassThru
+          Write-Host "==> MSI Exit Code: $($proc.ExitCode)"
+          Remove-Item $installer -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 15
+
+          # اتأكد انه اتثبت
+          $found = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $found) {
+            $foundSearch = Get-ChildItem -Path "C:\Program Files*\" -Filter "tailscale.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($foundSearch) { $found = $foundSearch.FullName }
+          }
+          if ($found) { Write-Host "==> Tailscale installed at: $found" }
+          else { 
+            Write-Host "==> Install log:"; Get-Content "$env:TEMP\tailscale_install.log" -ErrorAction SilentlyContinue | Select-Object -Last 50
+            Write-Error "Tailscale install failed - exe not found"; exit 1 
+          }
+
+      - name: Connect Tailscale (Auto-Find Exe)
+        run: |
+          # هات مسار tailscale تلقائي
+          $tsExe = @("$env:ProgramFiles\Tailscale\tailscale.exe","${env:ProgramFiles(x86)}\Tailscale\tailscale.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $tsExe) {
+            $search = Get-ChildItem -Path "C:\Program Files*\" -Filter "tailscale.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($search) { $tsExe = $search.FullName }
+          }
+          if (-not $tsExe) { Write-Error "tailscale.exe not found anywhere!"; exit 1 }
+          Write-Host "==> Using Tailscale at: $tsExe"
+          
+          $authKey = "${{ secrets.TAILSCALE_AUTH_KEY }}"
+          if (-not $authKey -or $authKey -eq "") {
+            Write-Error "TAILSCALE_AUTH_KEY is EMPTY! روح Settings > Secrets and variables > Actions > New repository secret وسميه TAILSCALE_AUTH_KEY وحط فيه المفتاح من https://login.tailscale.com/admin/settings/keys"
+            exit 1
+          }
+          
+          Write-Host "==> Connecting..."
+          & $tsExe up --authkey=$authKey --hostname=Dev-Abdo-RDP --accept-routes --accept-dns=false
+          
+          $tsIP = $null; $retries = 0
+          while (-not $tsIP -and $retries -lt 15) {
+            $tsIP = & $tsExe ip -4 2>$null
+            if ($tsIP) { $tsIP = $tsIP.Trim() }
+            if (-not $tsIP) { Start-Sleep -Seconds 5; $retries++ }
+          }
+          if (-not $tsIP) { Write-Error "Failed to get Tailscale IP after 75s"; & $tsExe status; exit 1 }
+          Write-Host "==> Tailscale IP: $tsIP"
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+
+      - name: Show Info
+        run: |
+          Write-Host "================================================"
+          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
+          Write-Host "Username: Dev_Abdo"
+          Write-Host "Password: Abdo012#"
+          Write-Host "Owner: Dev_Abdo"
+          Write-Host "================================================"
+
+      - name: Keep Alive
+        run: |
+          Write-Host "Server running 6 hours max..."
+          Start-Sleep -Seconds 21400          echo "RDP_CREDS=User: $targetName | Password: $password" >> $env:GITHUB_ENV
+
+      - name: Hide Other Users
+        run: |
+          $path = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\SpecialAccounts\UserList"
+          if (-not (Test-Path $path)) { New-Item -Path $path -Force | Out-Null }
+          Set-ItemProperty -Path $path -Name "Administrator" -Value 0 -Type DWord -Force
+          Disable-LocalUser -Name "Administrator" -ErrorAction SilentlyContinue
+          Set-ItemProperty -Path $path -Name "Guest" -Value 0 -Type DWord -Force
+          Set-ItemProperty -Path $path -Name "DefaultAccount" -Value 0 -Type DWord -Force
+
+      - name: Force Install Microsoft Store (Server Fix - Non-Blocking)
+        continue-on-error: true
+        run: |
+          Write-Host "==> Checking Microsoft Store (Server Compatible)..."
+          $found = Get-ChildItem "C:\Program Files\WindowsApps" -Filter "*WindowsStore*" -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
           if ($found) { 
             Write-Host "==> Store already installed: $($found.Name)"
             exit 0
