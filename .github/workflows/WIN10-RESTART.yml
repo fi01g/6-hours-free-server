@@ -31,10 +31,10 @@ jobs:
             Add-LocalGroupMember -Group "Remote Desktop Users" -Member $u -ErrorAction SilentlyContinue
             Write-Host "Created new user"
           } else {
-            Write-Host "User exists - keeping profile and wallpaper"
-            $s=ConvertTo-SecureString $p -AsPlainText -Force; Set-LocalUser -Name $u -Password $s -PasswordNeverExpires:$true -AccountNeverExpires:$true
+            Write-Host "User exists - keeping profile"
+            $s=ConvertTo-SecureString $p -AsPlainText -Force; Set-LocalUser -Name $u -Password $s -ErrorAction SilentlyContinue
           }
-          icacls C:\Users\Dev /grant Dev:F /T 2>$null | Out-Null
+          $LASTEXITCODE=0
       - name: Install Tailscale
         run: |
           $tp="$env:ProgramFiles\Tailscale\tailscale.exe"
