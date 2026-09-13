@@ -3,21 +3,18 @@ on:
   workflow_dispatch:
   schedule:
     - cron: '0 */6 * * *'
-
 jobs:
   secure-rdp:
     runs-on: windows-2022
     timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
-
       - name: Restore Cache
         uses: actions/cache/restore@v4
         with:
           path: C:\Users\Dev\Documents
           key: win-rdp-v1
           restore-keys: win-rdp-
-
       - name: Enable RDP
         run: |
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
@@ -25,7 +22,6 @@ jobs:
           netsh advfirewall firewall delete rule name="RDP-Dev" 2>$null
           netsh advfirewall firewall add rule name="RDP-Dev" dir=in action=allow protocol=TCP localport=3389
           Restart-Service -Name TermService -Force
-
       - name: Create User Dev
         run: |
           $u="Dev"; $p="Abdo012#"
@@ -33,7 +29,6 @@ jobs:
           $s=ConvertTo-SecureString $p -AsPlainText -Force; New-LocalUser -Name $u -Password $s -AccountNeverExpires -PasswordNeverExpires
           Add-LocalGroupMember -Group "Administrators" -Member $u -ErrorAction SilentlyContinue
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member $u -ErrorAction SilentlyContinue
-
       - name: Install Tailscale
         run: |
           $tp="$env:ProgramFiles\Tailscale\tailscale.exe"
@@ -41,7 +36,6 @@ jobs:
             $u="https://pkgs.tailscale.com/stable/tailscale-setup-1.102.4-amd64.msi"; $i="$env:TEMP\tailscale.msi"
             Invoke-WebRequest -Uri $u -OutFile $i; Start-Process msiexec.exe -ArgumentList "/i","`"$i`"","/quiet","/norestart" -Wait; Remove-Item $i -Force
           }
-
       - name: Connect Tailscale Fixed
         env:
           TS_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
@@ -50,32 +44,38 @@ jobs:
           & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=file:$kf --hostname=gh-win-fixed
           Remove-Item $kf -Force
           $ip=$null; $r=0; while(-not $ip -and $r -lt 15){$ip=& "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4; Start-Sleep 5; $r++}
-          echo "TAILSCALE_IP=$ip" >> $env:GITHUB_ENV; Write-Host "IP: $ip Host: gh-win-fixed"
-
+          echo "TAILSCALE_IP=$ip" >> $env:GITHUB_ENV; Write-Host "IP: $ip"
       - name: Show Info
         run: |
           Write-Host "IP: $env:TAILSCALE_IP Host: gh-win-fixed User: Dev Pass: Abdo012#"
-
-      - name: Send Telegram RDP Info
+      - name: Send Telegram With Copy Buttons
         env:
           BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          $Text = "RDP اشتغل - IP: $env:TAILSCALE_IP Host: gh-win-fixed User: Dev Pass: Abdo012#"
-          $Uri = "https://api.telegram.org/bot$env:BOT_TOKEN/sendMessage"
-          $Body = @{chat_id=$env:CHAT_ID; text=$Text}
-          Invoke-RestMethod -Uri $Uri -Method Post -Body $Body | Out-Null
-          Write-Host "Sent to Telegram"
-
+          $ip = $env:TAILSCALE_IP
+          $keyboard = @{
+            inline_keyboard = @(
+              @(@{ text="📋 نسخ IP"; copy_text=@{ text="$ip" } }),
+              @(@{ text="👤 نسخ اليوزر"; copy_text=@{ text="Dev" } }),
+              @(@{ text="🔑 نسخ الباسورد"; copy_text=@{ text="Abdo012#" } }),
+              @(@{ text="🖥️ نسخ Host"; copy_text=@{ text="gh-win-fixed" } })
+            )
+          }
+          $payload = @{
+            chat_id = $env:CHAT_ID
+            text = "✅ RDP جاهز`nIP: $ip`nHost: gh-win-fixed`nUser: Dev`nPass: Abdo012#"
+            reply_markup = $keyboard
+          } | ConvertTo-Json -Depth 5 -Compress
+          Invoke-RestMethod -Uri "https://api.telegram.org/bot$env:BOT_TOKEN/sendMessage" -Method Post -ContentType "application/json" -Body $payload | Out-Null
+          Write-Host "Sent with buttons"
       - name: Keep Alive
         run: Start-Sleep -Seconds 21000
-
       - name: Trigger Next Run
         if: always()
         run: gh workflow run WIN10-RESTART.yml
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Save Cache
         if: always()
         uses: actions/cache/save@v4
