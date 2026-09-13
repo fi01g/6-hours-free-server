@@ -15,67 +15,57 @@ jobs:
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
           netsh advfirewall firewall add rule name="RDP-Dev" dir=in action=allow protocol=TCP localport=3389 2>$null
           Restart-Service TermService -Force
-      - name: Create User Dev Keep Profile
+      - name: Create User Dev
         run: |
-          $u="Dev"; $p="Abdo012#"
-          $e=Get-LocalUser -Name $u -ErrorAction SilentlyContinue
-          if(-not $e){
-            $s=ConvertTo-SecureString $p -AsPlainText -Force; New-LocalUser -Name $u -Password $s -AccountNeverExpires -PasswordNeverExpires
-            Add-LocalGroupMember -Group Administrators -Member $u -ErrorAction SilentlyContinue
-            Add-LocalGroupMember -Group "Remote Desktop Users" -Member $u -ErrorAction SilentlyContinue
-          } else {
-            $s=ConvertTo-SecureString $p -AsPlainText -Force; Set-LocalUser -Name $u -Password $s -ErrorAction SilentlyContinue
-          }
+          $u="Dev"; $p="Abdo012#"; $e=Get-LocalUser -Name $u -ErrorAction SilentlyContinue
+          if(-not $e){$s=ConvertTo-SecureString $p -AsPlainText -Force; New-LocalUser -Name $u -Password $s -AccountNeverExpires -PasswordNeverExpires; Add-LocalGroupMember -Group Administrators -Member $u -ErrorAction SilentlyContinue; Add-LocalGroupMember -Group "Remote Desktop Users" -Member $u -ErrorAction SilentlyContinue}
           $LASTEXITCODE=0
-      - name: Restore Full Profile After User Created
+      - name: Restore Full Profile
         uses: actions/cache/restore@v4
         with:
           path: C:\Users\Dev
-          key: rdp-full-v3
+          key: rdp-full-v4
           restore-keys: rdp-full-
-      - name: Apply Wallpaper Registry
+      - name: Restore Theme Hive
         run: |
-          if(Test-Path C:\Users\Dev\wallpaper.reg){ reg import C:\Users\Dev\wallpaper.reg 2>$null; Write-Host "Wallpaper registry restored" }
-          if(Test-Path C:\Users\Dev\theme.reg){ reg import C:\Users\Dev\theme.reg 2>$null; Write-Host "Theme restored" }
+          if(Test-Path C:\Users\Dev\NTUSER.DAT){
+            reg load HKU\DevTemp C:\Users\Dev\NTUSER.DAT 2>$null
+            if($LASTEXITCODE -eq 0){
+              reg import C:\Users\Dev\wallpaper.reg 2>$null
+              reg import C:\Users\Dev\theme.reg 2>$null
+              reg unload HKU\DevTemp 2>$null
+            }
+          }
           $LASTEXITCODE=0
       - name: Install Tailscale
         run: |
-          $tp="$env:ProgramFiles\Tailscale\tailscale.exe"
-          if(-not(Test-Path $tp)){
-            $u="https://pkgs.tailscale.com/stable/tailscale-setup-1.102.4-amd64.msi"; $i="$env:TEMP\tailscale.msi"
-            Invoke-WebRequest -Uri $u -OutFile $i; Start-Process msiexec.exe -ArgumentList "/i","`"$i`"","/quiet","/norestart" -Wait; Remove-Item $i -Force
-          }
+          $tp="$env:ProgramFiles\Tailscale\tailscale.exe"; if(-not(Test-Path $tp)){Invoke-WebRequest -Uri https://pkgs.tailscale.com/stable/tailscale-setup-1.102.4-amd64.msi -OutFile $env:TEMP\t.msi; Start-Process msiexec.exe -ArgumentList "/i","`"$env:TEMP\t.msi`"","/quiet" -Wait}
       - name: Connect Tailscale Fixed
         env:
           TS_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
         run: |
-          $kf="$env:TEMP\tskey.txt"; $env:TS_KEY | Out-File -FilePath $kf -Encoding ascii -NoNewline
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=file:$kf --hostname=gh-win-fixed
-          Remove-Item $kf -Force
-          $ip=$null; $r=0; while(-not $ip -and $r -lt 15){$ip=& "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4; Start-Sleep 5; $r++}
-          echo "TAILSCALE_IP=$ip" >> $env:GITHUB_ENV; Write-Host "IP: $ip"
-      - name: Send Telegram With Copy Buttons
+          $kf="$env:TEMP\tskey.txt"; $env:TS_KEY | Out-File $kf -Encoding ascii -NoNewline; & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=file:$kf --hostname=gh-win-fixed; Remove-Item $kf -Force
+          $ip=& "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4; echo "TAILSCALE_IP=$ip" >> $env:GITHUB_ENV
+      - name: Send Telegram
         env:
           BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          $ip = $env:TAILSCALE_IP
-          $keyboard = @{
-            inline_keyboard = @(
-              @(@{ text="📋 نسخ IP"; copy_text=@{ text="$ip" } }),
-              @(@{ text="👤 نسخ اليوزر"; copy_text=@{ text="Dev" } }),
-              @(@{ text="🔑 نسخ الباسورد"; copy_text=@{ text="Abdo012#" } })
-            )
-          }
-          $payload = @{ chat_id=$env:CHAT_ID; text="✅ RDP جاهز`nIP: $ip`nHost: gh-win-fixed`nUser: Dev`nPass: Abdo012#"; reply_markup=$keyboard } | ConvertTo-Json -Depth 5 -Compress
-          Invoke-RestMethod -Uri "https://api.telegram.org/bot$env:BOT_TOKEN/sendMessage" -Method Post -ContentType "application/json" -Body $payload | Out-Null
+          $ip=$env:TAILSCALE_IP; $k=@{inline_keyboard=@(@(@{text="📋 نسخ IP";copy_text=@{text="$ip"}}),@(@{text="👤 نسخ اليوزر";copy_text=@{text="Dev"}}),@(@{text="🔑 نسخ الباسورد";copy_text=@{text="Abdo012#"}}))}; $p=@{chat_id=$env:CHAT_ID; text="✅ RDP جاهز`nIP: $ip`nHost: gh-win-fixed"; reply_markup=$k}|ConvertTo-Json -Depth 5 -Compress; Invoke-RestMethod -Uri "https://api.telegram.org/bot$env:BOT_TOKEN/sendMessage" -Method Post -ContentType "application/json" -Body $p | Out-Null
       - name: Keep Alive
         run: Start-Sleep -Seconds 21000
-      - name: Export Theme Before Save
+      - name: Export Theme As Dev
         if: always()
         run: |
-          reg export "HKCU\Control Panel\Desktop" C:\Users\Dev\wallpaper.reg /y 2>$null
-          reg export "HKCU\Software\Microsoft\Windows\CurrentVersion\Themes" C:\Users\Dev\theme.reg /y 2>$null
+          Enable-PSRemoting -Force 2>$null; $LASTEXITCODE=0
+          $pass=ConvertTo-SecureString "Abdo012#" -AsPlainText -Force; $cred=New-Object PSCredential("Dev",$pass)
+          try{
+            Invoke-Command -ComputerName localhost -Credential $cred -ScriptBlock {
+              reg export "HKCU\Control Panel\Desktop" "C:\Users\Dev\wallpaper.reg" /y 2>$null
+              reg export "HKCU\Software\Microsoft\Windows\CurrentVersion\Themes" "C:\Users\Dev\theme.reg" /y 2>$null
+              reg export "HKCU\Software\Microsoft\Windows\DWM" "C:\Users\Dev\dwm.reg" /y 2>$null
+            } -ErrorAction SilentlyContinue
+          } catch {}
           $LASTEXITCODE=0
       - name: Trigger Next Run
         if: always()
@@ -87,4 +77,4 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: C:\Users\Dev
-          key: rdp-full-v3-${{ github.run_id }}
+          key: rdp-full-v4-${{ github.run_id }}
