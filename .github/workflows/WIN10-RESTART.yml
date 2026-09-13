@@ -19,24 +19,29 @@ jobs:
         run: |
           $u="Dev"; $p="Abdo012#"; $e=Get-LocalUser -Name $u -ErrorAction SilentlyContinue
           if(-not $e){$s=ConvertTo-SecureString $p -AsPlainText -Force; New-LocalUser -Name $u -Password $s -AccountNeverExpires -PasswordNeverExpires; Add-LocalGroupMember -Group Administrators -Member $u -ErrorAction SilentlyContinue; Add-LocalGroupMember -Group "Remote Desktop Users" -Member $u -ErrorAction SilentlyContinue}
-          $LASTEXITCODE=0
+          Enable-PSRemoting -Force 2>$null; $LASTEXITCODE=0
       - name: Restore Full Profile
         uses: actions/cache/restore@v4
         with:
           path: D:\DevBackup
-          key: rdp-profile-v5
+          key: rdp-profile-v6
           restore-keys: rdp-profile-
-      - name: Copy Settings To New Profile
+      - name: Copy Settings As Dev
         run: |
-          if(Test-Path D:\DevBackup\Documents){
-            Write-Host "Restoring..."
-            robocopy D:\DevBackup\Documents C:\Users\Dev\Documents /E /R:0 /W:0 2>$null | Out-Null
-            robocopy D:\DevBackup\Desktop C:\Users\Dev\Desktop /E /R:0 /W:0 2>$null | Out-Null
+          if(Test-Path D:\DevBackup\wallpaper.reg){
+            Write-Host "Cache found - applying theme as Dev..."
             robocopy D:\DevBackup\Pictures C:\Users\Dev\Pictures /E /R:0 /W:0 2>$null | Out-Null
             robocopy "D:\DevBackup\Themes" "C:\Users\Dev\AppData\Roaming\Microsoft\Windows\Themes" /E /R:0 /W:0 2>$null | Out-Null
-            if(Test-Path D:\DevBackup\wallpaper.reg){ reg import D:\DevBackup\wallpaper.reg 2>$null }
-            if(Test-Path D:\DevBackup\theme.reg){ reg import D:\DevBackup\theme.reg 2>$null }
-          } else { Write-Host "No cache - first run" }
+            robocopy D:\DevBackup\Desktop C:\Users\Dev\Desktop /E /R:0 /W:0 2>$null | Out-Null
+            $p=ConvertTo-SecureString "Abdo012#" -AsPlainText -Force; $c=New-Object PSCredential("Dev",$p)
+            Invoke-Command -ComputerName localhost -Credential $c -ScriptBlock {
+              reg import D:\DevBackup\wallpaper.reg 2>$null
+              reg import D:\DevBackup\theme.reg 2>$null
+              $wp=(Get-ItemProperty "HKCU:\Control Panel\Desktop" -Name WallPaper -ErrorAction SilentlyContinue).WallPaper
+              if($wp -and (Test-Path $wp)){ RUNDLL32.EXE user32.dll,UpdatePerUserSystemParameters 1, True }
+            } -ErrorAction SilentlyContinue
+            Write-Host "Theme applied as Dev"
+          } else { Write-Host "No cache - first run, set wallpaper in C:\Users\Dev\Pictures" }
           $LASTEXITCODE=0
       - name: Install Tailscale
         run: |
@@ -46,8 +51,8 @@ jobs:
           TS_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
         run: |
           $kf="$env:TEMP\tskey.txt"; $env:TS_KEY | Out-File $kf -Encoding ascii -NoNewline; & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=file:$kf --hostname=gh-win-fixed; Remove-Item $kf -Force
-          $ip=& "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4; echo "TAILSCALE_IP=$ip" >> $env:GITHUB_ENV; Write-Host "IP $ip"
-      - name: Send Telegram With Copy Buttons
+          $ip=& "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4; echo "TAILSCALE_IP=$ip" >> $env:GITHUB_ENV
+      - name: Send Telegram
         env:
           BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -55,30 +60,28 @@ jobs:
           $ip=$env:TAILSCALE_IP; $k=@{inline_keyboard=@(@(@{text="📋 نسخ IP";copy_text=@{text="$ip"}}),@(@{text="👤 نسخ اليوزر";copy_text=@{text="Dev"}}),@(@{text="🔑 نسخ الباسورد";copy_text=@{text="Abdo012#"}}))}; $p=@{chat_id=$env:CHAT_ID; text="✅ RDP جاهز`nIP: $ip`nHost: gh-win-fixed"; reply_markup=$k}|ConvertTo-Json -Depth 5 -Compress; Invoke-RestMethod -Uri "https://api.telegram.org/bot$env:BOT_TOKEN/sendMessage" -Method Post -ContentType "application/json" -Body $p | Out-Null
       - name: Keep Alive
         run: Start-Sleep -Seconds 21000
-      - name: Backup Profile Before Save
+      - name: Backup As Dev
         if: always()
         run: |
-          Remove-Item C:\Users\Dev\AppData\Local\Temp\* -Recurse -Force -ErrorAction SilentlyContinue
           New-Item -Path D:\DevBackup -ItemType Directory -Force | Out-Null
           Remove-Item D:\DevBackup\* -Recurse -Force -ErrorAction SilentlyContinue
-          robocopy C:\Users\Dev\Documents D:\DevBackup\Documents /E /R:0 /W:0 2>$null | Out-Null
-          robocopy C:\Users\Dev\Desktop D:\DevBackup\Desktop /E /R:0 /W:0 2>$null | Out-Null
           robocopy C:\Users\Dev\Pictures D:\DevBackup\Pictures /E /R:0 /W:0 2>$null | Out-Null
           robocopy "C:\Users\Dev\AppData\Roaming\Microsoft\Windows\Themes" D:\DevBackup\Themes /E /R:0 /W:0 2>$null | Out-Null
-          try{
-            $p=ConvertTo-SecureString "Abdo012#" -AsPlainText -Force; $c=New-Object PSCredential("Dev",$p); Enable-PSRemoting -Force 2>$null
-            Invoke-Command -ComputerName localhost -Credential $c -ScriptBlock { reg export "HKCU\Control Panel\Desktop" "D:\DevBackup\wallpaper.reg" /y 2>$null; reg export "HKCU\Software\Microsoft\Windows\CurrentVersion\Themes" "D:\DevBackup\theme.reg" /y 2>$null } -ErrorAction SilentlyContinue
-          } catch {}
-          wmic computersystem where name="%computername%" set AutomaticManagedPagefile=True 2>$null | Out-Null
+          robocopy C:\Users\Dev\Desktop D:\DevBackup\Desktop /E /R:0 /W:0 2>$null | Out-Null
+          $p=ConvertTo-SecureString "Abdo012#" -AsPlainText -Force; $c=New-Object PSCredential("Dev",$p)
+          Invoke-Command -ComputerName localhost -Credential $c -ScriptBlock {
+            reg export "HKCU\Control Panel\Desktop" "D:\DevBackup\wallpaper.reg" /y 2>$null
+            reg export "HKCU\Software\Microsoft\Windows\CurrentVersion\Themes" "D:\DevBackup\theme.reg" /y 2>$null
+          } -ErrorAction SilentlyContinue
           $LASTEXITCODE=0
       - name: Trigger Next Run
         if: always()
         run: gh workflow run WIN10-RESTART.yml
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Save Profile
+      - name: Save Full Profile
         if: always()
         uses: actions/cache/save@v4
         with:
           path: D:\DevBackup
-          key: rdp-profile-v5-${{ github.run_id }}
+          key: rdp-profile-v6-${{ github.run_id }}
