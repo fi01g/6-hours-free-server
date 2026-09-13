@@ -31,9 +31,9 @@ jobs:
           
           Write-Host "==> RDP enabled on port 3389."
 
-      - name: Create User Dev_Abdo
+      - name: Create User Dev
         run: |
-          $username = "Dev_Abdo"
+          $username = "Dev"
           $password = "Abdo012#"
           
           Write-Host "==> Creating user $username..."
@@ -89,7 +89,7 @@ jobs:
               }
           }
 
-      - name: Hide Other Users (Show Only Dev_Abdo)
+      - name: Hide Other Users (Show Only Dev)
         run: |
           Write-Host "==> Hiding other user accounts from login screen..."
           
@@ -172,7 +172,7 @@ jobs:
           Write-Host "================================================" -ForegroundColor Cyan
           Write-Host "  Tailscale IP:  $env:TAILSCALE_IP" -ForegroundColor White
           Write-Host "  RDP Port:      3389" -ForegroundColor White
-          Write-Host "  Username:      Dev_Abdo" -ForegroundColor White
+          Write-Host "  Username:      Dev" -ForegroundColor White
           Write-Host "  Password:      Abdo012#" -ForegroundColor White
           Write-Host "================================================" -ForegroundColor Cyan
           Write-Host ""
@@ -181,7 +181,7 @@ jobs:
           Write-Host "  📱 Connect from Android:" -ForegroundColor Yellow
           Write-Host "  1. Install Microsoft Remote Desktop" -ForegroundColor White
           Write-Host "  2. Add PC: $env:TAILSCALE_IP" -ForegroundColor White
-          Write-Host "  3. User: Dev_Abdo / Pass: Abdo012#" -ForegroundColor White
+          Write-Host "  3. User: Dev / Pass: Abdo012#" -ForegroundColor White
           Write-Host "================================================" -ForegroundColor Cyan
 
       - name: Keep Alive (6 hours max)
@@ -190,7 +190,7 @@ jobs:
           Write-Host "==> DO NOT CANCEL THIS WORKFLOW!" -ForegroundColor Red
           Write-Host ""
           Write-Host "  Tailscale IP: $env:TAILSCALE_IP" -ForegroundColor Cyan
-          Write-Host "  User: Dev_Abdo / Abdo012#" -ForegroundColor Cyan
+          Write-Host "  User: Dev / Abdo012#" -ForegroundColor Cyan
           Write-Host ""
           
           # Keep the runner alive
@@ -198,183 +198,3 @@ jobs:
           # Make sure password never expires
           Set-LocalUser -Name $targetName -PasswordNeverExpires:$true
           Set-LocalUser -Name $targetName -AccountNeverExpires:$true
-
-          Add-LocalGroupMember -Group "Administrators" -Member $targetName -ErrorAction SilentlyContinue
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $targetName -ErrorAction SilentlyContinue
-
-          $user = Get-LocalUser -Name $targetName
-          if ($user) {
-            Write-Host "==> User $targetName is ready with full admin rights!"
-            Write-Host "    Enabled: $($user.Enabled)"
-            Write-Host "    PasswordNeverExpires: $($user.PasswordNeverExpires)"
-          } else {
-            Write-Error "Failed to rename user!"
-            exit 1
-          }
-
-          echo "RDP_CREDS=User: $targetName | Password: $password" >> $env:GITHUB_ENV
-
-      - name: Hide Other Users
-        run: |
-          $path = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\SpecialAccounts\UserList"
-          if (-not (Test-Path $path)) { New-Item -Path $path -Force | Out-Null }
-
-          Set-ItemProperty -Path $path -Name "Administrator" -Value 0 -Type DWord -Force
-          Disable-LocalUser -Name "Administrator" -ErrorAction SilentlyContinue
-
-          Set-ItemProperty -Path $path -Name "Guest" -Value 0 -Type DWord -Force
-
-          Set-ItemProperty -Path $path -Name "DefaultAccount" -Value 0 -Type DWord -Force
-
-          Write-Host "==> All other users hidden. Only Dev_Abdo is visible."
-
-      - name: Ensure Microsoft Store
-        run: |
-          $store = Get-ChildItem "C:\Program Files\WindowsApps" -Filter "*WindowsStore*" -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
-          if ($store) {
-            Write-Host "==> Microsoft Store is installed!"
-          } else {
-            Start-Service -Name "AppXSvc" -ErrorAction SilentlyContinue
-            Set-Service -Name "AppXSvc" -StartupType Automatic -ErrorAction SilentlyContinue
-            Start-Service -Name "ClipSvc" -ErrorAction SilentlyContinue
-            Set-Service -Name "ClipSvc" -StartupType Automatic -ErrorAction SilentlyContinue
-            Write-Host "==> AppX services enabled."
-
-      - name: Install Tailscale
-        run: |
-          $tsPath = "$env:ProgramFiles\Tailscale\tailscale.exe"
-          if (-not (Test-Path $tsPath)) {
-            $url = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
-            $installer = "$env:TEMP\tailscale.msi"
-            Invoke-WebRequest -Uri $url -OutFile $installer
-            Start-Process msiexec.exe -ArgumentList "/i", ""$installer"", "/quiet", "/norestart" -Wait
-            Remove-Item $installer -Force
-          }
-
-      - name: Connect Tailscale
-        run: |
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=Dev-Abdo-RDP
-          $tsIP = $null
-          $retries = 0
-          while (-not $tsIP -and $retries -lt 15) {
-            $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
-            Start-Sleep -Seconds 5
-            $retries++
-          }
-          if (-not $tsIP) { Write-Error "No IP"; exit 1 }
-          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
-
-      - name: Show Info
-        run: |
-          Write-Host "================================================"
-          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
-          Write-Host "Username: Dev_Abdo"
-          Write-Host "Password: Abdo012#"
-          Write-Host "================================================"
-
-      - name: Keep Alive
-        run: |
-          Write-Host "Server running 6 hours max..."
-          Start-Sleep -Seconds 21400
-          Rename-LocalUser -Name "runneradmin" -NewName $targetName
-
-
-          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
-          Set-LocalUser -Name $targetName -Password $securePass
-
-
-          # Make sure password never expires
-          Set-LocalUser -Name $targetName -PasswordNeverExpires:$true
-          Set-LocalUser -Name $targetName -AccountNeverExpires:$true
-
-
-          Add-LocalGroupMember -Group "Administrators" -Member $targetName -ErrorAction SilentlyContinue
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $targetName -ErrorAction SilentlyContinue
-
-
-          $user = Get-LocalUser -Name $targetName
-          if ($user) {
-            Write-Host "==> User $targetName is ready with full admin rights!"
-            Write-Host "    Enabled: $($user.Enabled)"
-            Write-Host "    PasswordNeverExpires: $($user.PasswordNeverExpires)"
-          } else {
-            Write-Error "Failed to rename user!"
-            exit 1
-          }
-
-
-          echo "RDP_CREDS=User: $targetName | Password: $password" >> $env:GITHUB_ENV
-
-
-      - name: Hide Other Users
-        run: |
-          $path = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\SpecialAccounts\UserList"
-          if (-not (Test-Path $path)) { New-Item -Path $path -Force | Out-Null }
-
-
-          Set-ItemProperty -Path $path -Name "Administrator" -Value 0 -Type DWord -Force
-          Disable-LocalUser -Name "Administrator" -ErrorAction SilentlyContinue
-
-
-          Set-ItemProperty -Path $path -Name "Guest" -Value 0 -Type DWord -Force
-
-
-          Set-ItemProperty -Path $path -Name "DefaultAccount" -Value 0 -Type DWord -Force
-
-
-          Write-Host "==> All other users hidden. Only Dev_Abdo is visible."
-
-
-      - name: Ensure Microsoft Store
-        run: |
-          $store = Get-ChildItem "C:\Program Files\WindowsApps" -Filter "*WindowsStore*" -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
-          if ($store) {
-            Write-Host "==> Microsoft Store is installed!"
-          } else {
-            Start-Service -Name "AppXSvc" -ErrorAction SilentlyContinue
-            Set-Service -Name "AppXSvc" -StartupType Automatic -ErrorAction SilentlyContinue
-            Start-Service -Name "ClipSvc" -ErrorAction SilentlyContinue
-            Set-Service -Name "ClipSvc" -StartupType Automatic -ErrorAction SilentlyContinue
-            Write-Host "==> AppX services enabled."
-          }
-
-
-      - name: Install Tailscale
-        run: |
-          $tsPath = "$env:ProgramFiles\Tailscale\tailscale.exe"
-          if (-not (Test-Path $tsPath)) {
-            $url = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
-            $installer = "$env:TEMP\tailscale.msi"
-            Invoke-WebRequest -Uri $url -OutFile $installer
-            Start-Process msiexec.exe -ArgumentList "/i",$installer,"/quiet","/norestart" -Wait
-            Remove-Item $installer -Force
-          }
-
-
-      - name: Connect Tailscale
-        run: |
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=Dev-Abdo-RDP
-          $tsIP = $null
-          $retries = 0
-          while (-not $tsIP -and $retries -lt 15) {
-            $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
-            Start-Sleep -Seconds 5
-            $retries++
-          }
-          if (-not $tsIP) { Write-Error "No IP"; exit 1 }
-          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
-
-
-      - name: Show Info
-        run: |
-          Write-Host "================================================"
-          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
-          Write-Host "Username: Dev_Abdo"
-          Write-Host "Password: Abdo012#"
-          Write-Host "================================================"
-
-
-      - name: Keep Alive
-        run: |
-          Write-Host "Server running 6 hours max..."
-          Start-Sleep -Seconds 21400
