@@ -15,6 +15,12 @@ jobs:
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
           netsh advfirewall firewall add rule name="RDP-Dev" dir=in action=allow protocol=TCP localport=3389 2>$null
           Restart-Service TermService -Force
+      - name: Fix Paging and Disable Test Mode
+        run: |
+          wmic computersystem where name="%computername%" set AutomaticManagedPagefile=True 2>$null | Out-Null
+          bcdedit /set testsigning off 2>$null | Out-Null
+          bcdedit /set nointegritychecks off 2>$null | Out-Null
+          $LASTEXITCODE=0
       - name: Create User Dev
         run: |
           $u="Dev"; $p="Abdo012#"; $e=Get-LocalUser -Name $u -ErrorAction SilentlyContinue
@@ -29,10 +35,9 @@ jobs:
       - name: Copy Settings As Dev
         run: |
           if(Test-Path D:\DevBackup\wallpaper.reg){
-            Write-Host "Restoring theme/icons..."
-            robocopy D:\DevBackup\Desktop C:\Users\Dev\Desktop /E /R:0 /W:0 2>$null | Out-Null
             robocopy D:\DevBackup\Pictures C:\Users\Dev\Pictures /E /R:0 /W:0 2>$null | Out-Null
             robocopy "D:\DevBackup\Themes" "C:\Users\Dev\AppData\Roaming\Microsoft\Windows\Themes" /E /R:0 /W:0 2>$null | Out-Null
+            robocopy D:\DevBackup\Desktop C:\Users\Dev\Desktop /E /R:0 /W:0 2>$null | Out-Null
             $p=ConvertTo-SecureString "Abdo012#" -AsPlainText -Force; $c=New-Object PSCredential("Dev",$p)
             Invoke-Command -ComputerName localhost -Credential $c -ScriptBlock {
               reg import D:\DevBackup\wallpaper.reg 2>$null
@@ -41,7 +46,7 @@ jobs:
               reg import D:\DevBackup\explorer-advanced.reg 2>$null
               RUNDLL32.EXE user32.dll,UpdatePerUserSystemParameters 1, True
             } -ErrorAction SilentlyContinue
-          } else { Write-Host "No cache - first run" }
+          }
           $LASTEXITCODE=0
       - name: Install Tailscale
         run: |
@@ -50,9 +55,9 @@ jobs:
         env:
           TS_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
         run: |
-          $kf="$env:TEMP\tskey.txt"; $env:TS_KEY | Out-File $kf -Encoding ascii -NoNewline; & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=file:$kf --hostname=Abdo-Developer; Remove-Item $kf -Force
+          $kf="$env:TEMP\tskey.txt"; $env:TS_KEY | Out-File $kf -Encoding ascii -NoNewline; & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=file:$kf --hostname=gh-win-fixed; Remove-Item $kf -Force
           $ip=& "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4; echo "TAILSCALE_IP=$ip" >> $env:GITHUB_ENV
-      - name: Send Telegram With Copy Buttons
+      - name: Send Telegram
         env:
           BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -74,6 +79,7 @@ jobs:
             reg export "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer" "D:\DevBackup\explorer.reg" /y 2>$null
             reg export "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" "D:\DevBackup\explorer-advanced.reg" /y 2>$null
           } -ErrorAction SilentlyContinue
+          Remove-Item C:\Users\Dev\AppData\Local\Temp\* -Recurse -Force -ErrorAction SilentlyContinue
           $LASTEXITCODE=0
       - name: Trigger Next Run
         if: always()
