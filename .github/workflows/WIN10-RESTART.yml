@@ -1,4 +1,4 @@
-name: Win-10 Server 2022 RDP - Dev_Abdo
+name: Win-10 Dev_Abdo
 on:
   workflow_dispatch:
   schedule:
@@ -29,7 +29,6 @@ jobs:
       - name: Copy Settings As Dev Fix Explorer
         run: |
           if(Test-Path D:\DevBackup\wallpaper.reg){
-            Write-Host "Restoring..."
             robocopy D:\DevBackup\Pictures C:\Users\Dev\Pictures /E /R:0 /W:0 2>$null | Out-Null
             robocopy "D:\DevBackup\Themes" "C:\Users\Dev\AppData\Roaming\Microsoft\Windows\Themes" /E /R:0 /W:0 2>$null | Out-Null
             robocopy D:\DevBackup\Desktop C:\Users\Dev\Desktop /E /R:0 /W:0 2>$null | Out-Null
@@ -39,9 +38,8 @@ jobs:
               reg import D:\DevBackup\theme.reg 2>$null
               reg import D:\DevBackup\explorer-icons.reg 2>$null
               Set-ItemProperty -Path "HKCU:\Control Panel\Desktop" -Name "PaintDesktopVersion" -Value 0 -Force 2>$null
-              RUNDLL32.EXE user32.dll,UpdatePerUserSystemParameters 1, True
             } -ErrorAction SilentlyContinue
-          } else { Write-Host "No cache - first run" }
+          }
           $LASTEXITCODE=0
       - name: Hide Test Mode After Login
         run: |
@@ -54,6 +52,15 @@ jobs:
             Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue; Start-Sleep 2; Start-Process explorer.exe
           } -ErrorAction SilentlyContinue
           $LASTEXITCODE=0
+      - name: Hide Watermark With UWD
+        run: |
+          New-Item -Path C:\Temp -ItemType Directory -Force | Out-Null
+          try{
+            Invoke-WebRequest -Uri "https://github.com/DoubleLab/with/releases/download/v1.0/uwd.exe" -OutFile C:\Temp\uwd.exe -ErrorAction SilentlyContinue
+            Start-Process C:\Temp\uwd.exe -ArgumentList "/S" -Wait -ErrorAction SilentlyContinue
+            Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue; Start-Sleep 2; Start-Process explorer.exe -ErrorAction SilentlyContinue
+          } catch {}
+          $LASTEXITCODE=0
       - name: Install Tailscale
         run: |
           $tp="$env:ProgramFiles\Tailscale\tailscale.exe"; if(-not(Test-Path $tp)){Invoke-WebRequest -Uri https://pkgs.tailscale.com/stable/tailscale-setup-1.102.4-amd64.msi -OutFile $env:TEMP\t.msi; Start-Process msiexec.exe -ArgumentList "/i","`"$env:TEMP\t.msi`"","/quiet" -Wait}
@@ -62,7 +69,7 @@ jobs:
           TS_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
         run: |
           $kf="$env:TEMP\tskey.txt"; $env:TS_KEY | Out-File $kf -Encoding ascii -NoNewline; & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=file:$kf --hostname=gh-win-fixed; Remove-Item $kf -Force
-          $ip=& "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4; echo "TAILSCALE_IP=$ip" >> $env:GITHUB_ENV; Write-Host "IP $ip"
+          $ip=& "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4; echo "TAILSCALE_IP=$ip" >> $env:GITHUB_ENV
       - name: Send Telegram With Copy Buttons
         env:
           BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
