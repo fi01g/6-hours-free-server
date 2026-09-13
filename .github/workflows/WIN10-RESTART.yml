@@ -29,19 +29,19 @@ jobs:
       - name: Copy Settings As Dev
         run: |
           if(Test-Path D:\DevBackup\wallpaper.reg){
-            Write-Host "Cache found - applying theme as Dev..."
+            Write-Host "Restoring theme/icons..."
+            robocopy D:\DevBackup\Desktop C:\Users\Dev\Desktop /E /R:0 /W:0 2>$null | Out-Null
             robocopy D:\DevBackup\Pictures C:\Users\Dev\Pictures /E /R:0 /W:0 2>$null | Out-Null
             robocopy "D:\DevBackup\Themes" "C:\Users\Dev\AppData\Roaming\Microsoft\Windows\Themes" /E /R:0 /W:0 2>$null | Out-Null
-            robocopy D:\DevBackup\Desktop C:\Users\Dev\Desktop /E /R:0 /W:0 2>$null | Out-Null
             $p=ConvertTo-SecureString "Abdo012#" -AsPlainText -Force; $c=New-Object PSCredential("Dev",$p)
             Invoke-Command -ComputerName localhost -Credential $c -ScriptBlock {
               reg import D:\DevBackup\wallpaper.reg 2>$null
               reg import D:\DevBackup\theme.reg 2>$null
-              $wp=(Get-ItemProperty "HKCU:\Control Panel\Desktop" -Name WallPaper -ErrorAction SilentlyContinue).WallPaper
-              if($wp -and (Test-Path $wp)){ RUNDLL32.EXE user32.dll,UpdatePerUserSystemParameters 1, True }
+              reg import D:\DevBackup\explorer.reg 2>$null
+              reg import D:\DevBackup\explorer-advanced.reg 2>$null
+              RUNDLL32.EXE user32.dll,UpdatePerUserSystemParameters 1, True
             } -ErrorAction SilentlyContinue
-            Write-Host "Theme applied as Dev"
-          } else { Write-Host "No cache - first run, set wallpaper in C:\Users\Dev\Pictures" }
+          } else { Write-Host "No cache - first run" }
           $LASTEXITCODE=0
       - name: Install Tailscale
         run: |
@@ -50,9 +50,9 @@ jobs:
         env:
           TS_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
         run: |
-          $kf="$env:TEMP\tskey.txt"; $env:TS_KEY | Out-File $kf -Encoding ascii -NoNewline; & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=file:$kf --hostname=gh-win-fixed; Remove-Item $kf -Force
+          $kf="$env:TEMP\tskey.txt"; $env:TS_KEY | Out-File $kf -Encoding ascii -NoNewline; & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=file:$kf --hostname=Abdo-Developer; Remove-Item $kf -Force
           $ip=& "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4; echo "TAILSCALE_IP=$ip" >> $env:GITHUB_ENV
-      - name: Send Telegram
+      - name: Send Telegram With Copy Buttons
         env:
           BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -64,14 +64,15 @@ jobs:
         if: always()
         run: |
           New-Item -Path D:\DevBackup -ItemType Directory -Force | Out-Null
-          Remove-Item D:\DevBackup\* -Recurse -Force -ErrorAction SilentlyContinue
-          robocopy C:\Users\Dev\Pictures D:\DevBackup\Pictures /E /R:0 /W:0 2>$null | Out-Null
+          Remove-Item D:\DevBackup\Desktop -Recurse -Force -ErrorAction SilentlyContinue; robocopy C:\Users\Dev\Desktop D:\DevBackup\Desktop /E /R:0 /W:0 2>$null | Out-Null
+          Remove-Item D:\DevBackup\Pictures -Recurse -Force -ErrorAction SilentlyContinue; robocopy C:\Users\Dev\Pictures D:\DevBackup\Pictures /E /R:0 /W:0 2>$null | Out-Null
           robocopy "C:\Users\Dev\AppData\Roaming\Microsoft\Windows\Themes" D:\DevBackup\Themes /E /R:0 /W:0 2>$null | Out-Null
-          robocopy C:\Users\Dev\Desktop D:\DevBackup\Desktop /E /R:0 /W:0 2>$null | Out-Null
           $p=ConvertTo-SecureString "Abdo012#" -AsPlainText -Force; $c=New-Object PSCredential("Dev",$p)
           Invoke-Command -ComputerName localhost -Credential $c -ScriptBlock {
             reg export "HKCU\Control Panel\Desktop" "D:\DevBackup\wallpaper.reg" /y 2>$null
             reg export "HKCU\Software\Microsoft\Windows\CurrentVersion\Themes" "D:\DevBackup\theme.reg" /y 2>$null
+            reg export "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer" "D:\DevBackup\explorer.reg" /y 2>$null
+            reg export "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" "D:\DevBackup\explorer-advanced.reg" /y 2>$null
           } -ErrorAction SilentlyContinue
           $LASTEXITCODE=0
       - name: Trigger Next Run
