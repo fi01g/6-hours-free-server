@@ -9,12 +9,6 @@ jobs:
     timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
-      - name: Restore Full Profile
-        uses: actions/cache/restore@v4
-        with:
-          path: C:\Users\Dev
-          key: rdp-full-v3
-          restore-keys: rdp-full-
       - name: Enable RDP
         run: |
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
@@ -29,11 +23,20 @@ jobs:
             $s=ConvertTo-SecureString $p -AsPlainText -Force; New-LocalUser -Name $u -Password $s -AccountNeverExpires -PasswordNeverExpires
             Add-LocalGroupMember -Group Administrators -Member $u -ErrorAction SilentlyContinue
             Add-LocalGroupMember -Group "Remote Desktop Users" -Member $u -ErrorAction SilentlyContinue
-            Write-Host "Created new user"
           } else {
-            Write-Host "User exists - keeping profile"
             $s=ConvertTo-SecureString $p -AsPlainText -Force; Set-LocalUser -Name $u -Password $s -ErrorAction SilentlyContinue
           }
+          $LASTEXITCODE=0
+      - name: Restore Full Profile After User Created
+        uses: actions/cache/restore@v4
+        with:
+          path: C:\Users\Dev
+          key: rdp-full-v3
+          restore-keys: rdp-full-
+      - name: Apply Wallpaper Registry
+        run: |
+          if(Test-Path C:\Users\Dev\wallpaper.reg){ reg import C:\Users\Dev\wallpaper.reg 2>$null; Write-Host "Wallpaper registry restored" }
+          if(Test-Path C:\Users\Dev\theme.reg){ reg import C:\Users\Dev\theme.reg 2>$null; Write-Host "Theme restored" }
           $LASTEXITCODE=0
       - name: Install Tailscale
         run: |
@@ -51,9 +54,6 @@ jobs:
           Remove-Item $kf -Force
           $ip=$null; $r=0; while(-not $ip -and $r -lt 15){$ip=& "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4; Start-Sleep 5; $r++}
           echo "TAILSCALE_IP=$ip" >> $env:GITHUB_ENV; Write-Host "IP: $ip"
-      - name: Show Info
-        run: |
-          Write-Host "IP: $env:TAILSCALE_IP Host: gh-win-fixed User: Dev Pass: Abdo012#"
       - name: Send Telegram With Copy Buttons
         env:
           BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -64,18 +64,19 @@ jobs:
             inline_keyboard = @(
               @(@{ text="📋 نسخ IP"; copy_text=@{ text="$ip" } }),
               @(@{ text="👤 نسخ اليوزر"; copy_text=@{ text="Dev" } }),
-              @(@{ text="🔑 نسخ الباسورد"; copy_text=@{ text="Abdo012#" } }),
-              @(@{ text="🖥️ نسخ Host"; copy_text=@{ text="gh-win-fixed" } })
+              @(@{ text="🔑 نسخ الباسورد"; copy_text=@{ text="Abdo012#" } })
             )
           }
-          $payload = @{
-            chat_id = $env:CHAT_ID
-            text = "✅ RDP جاهز`nIP: $ip`nHost: gh-win-fixed`nUser: Dev`nPass: Abdo012#"
-            reply_markup = $keyboard
-          } | ConvertTo-Json -Depth 5 -Compress
+          $payload = @{ chat_id=$env:CHAT_ID; text="✅ RDP جاهز`nIP: $ip`nHost: gh-win-fixed`nUser: Dev`nPass: Abdo012#"; reply_markup=$keyboard } | ConvertTo-Json -Depth 5 -Compress
           Invoke-RestMethod -Uri "https://api.telegram.org/bot$env:BOT_TOKEN/sendMessage" -Method Post -ContentType "application/json" -Body $payload | Out-Null
       - name: Keep Alive
         run: Start-Sleep -Seconds 21000
+      - name: Export Theme Before Save
+        if: always()
+        run: |
+          reg export "HKCU\Control Panel\Desktop" C:\Users\Dev\wallpaper.reg /y 2>$null
+          reg export "HKCU\Software\Microsoft\Windows\CurrentVersion\Themes" C:\Users\Dev\theme.reg /y 2>$null
+          $LASTEXITCODE=0
       - name: Trigger Next Run
         if: always()
         run: gh workflow run WIN10-RESTART.yml
