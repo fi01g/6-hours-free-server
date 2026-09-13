@@ -15,11 +15,12 @@ jobs:
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
           netsh advfirewall firewall add rule name="RDP-Dev" dir=in action=allow protocol=TCP localport=3389 2>$null
           Restart-Service TermService -Force
-      - name: Fix Paging and Disable Test Mode
+      - name: Fix Paging and Hide Test Mode Watermark
         run: |
           wmic computersystem where name="%computername%" set AutomaticManagedPagefile=True 2>$null | Out-Null
-          bcdedit /set testsigning off 2>$null | Out-Null
-          bcdedit /set nointegritychecks off 2>$null | Out-Null
+          Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" -Name "LegalNoticeCaption" -Value "" -Force 2>$null | Out-Null
+          Set-ItemProperty -Path "HKCU:\Control Panel\Desktop" -Name "PaintDesktopVersion" -Value 0 -Force 2>$null | Out-Null
+          bcdedit /set testsigning off 2>$null | Out-Null; bcdedit /set nointegritychecks off 2>$null | Out-Null
           $LASTEXITCODE=0
       - name: Create User Dev
         run: |
@@ -30,9 +31,9 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: D:\DevBackup
-          key: rdp-profile-v6
+          key: rdp-profile-v7
           restore-keys: rdp-profile-
-      - name: Copy Settings As Dev
+      - name: Copy Settings As Dev Fix Explorer
         run: |
           if(Test-Path D:\DevBackup\wallpaper.reg){
             robocopy D:\DevBackup\Pictures C:\Users\Dev\Pictures /E /R:0 /W:0 2>$null | Out-Null
@@ -42,11 +43,19 @@ jobs:
             Invoke-Command -ComputerName localhost -Credential $c -ScriptBlock {
               reg import D:\DevBackup\wallpaper.reg 2>$null
               reg import D:\DevBackup\theme.reg 2>$null
-              reg import D:\DevBackup\explorer.reg 2>$null
-              reg import D:\DevBackup\explorer-advanced.reg 2>$null
+              # رجع Explorer بدون ما تبوظه
+              if(Test-Path D:\DevBackup\explorer-icons.reg){ reg import D:\DevBackup\explorer-icons.reg 2>$null }
+              Set-ItemProperty -Path "HKCU:\Control Panel\Desktop" -Name "PaintDesktopVersion" -Value 0 -Force 2>$null
               RUNDLL32.EXE user32.dll,UpdatePerUserSystemParameters 1, True
+              # تأكد File Explorer موجود
+              if(-not(Test-Path "C:\Users\Dev\Desktop\File Explorer.lnk")){
+                $WshShell=New-Object -comObject WScript.Shell; $Shortcut=$WshShell.CreateShortcut("C:\Users\Dev\Desktop\File Explorer.lnk")
+                $Shortcut.TargetPath="C:\Windows\explorer.exe"; $Shortcut.Save()
+              }
             } -ErrorAction SilentlyContinue
           }
+          # شغل Explorer تاني
+          Start-Process explorer.exe -ErrorAction SilentlyContinue | Out-Null
           $LASTEXITCODE=0
       - name: Install Tailscale
         run: |
@@ -76,8 +85,7 @@ jobs:
           Invoke-Command -ComputerName localhost -Credential $c -ScriptBlock {
             reg export "HKCU\Control Panel\Desktop" "D:\DevBackup\wallpaper.reg" /y 2>$null
             reg export "HKCU\Software\Microsoft\Windows\CurrentVersion\Themes" "D:\DevBackup\theme.reg" /y 2>$null
-            reg export "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer" "D:\DevBackup\explorer.reg" /y 2>$null
-            reg export "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" "D:\DevBackup\explorer-advanced.reg" /y 2>$null
+            reg export "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\HideDesktopIcons" "D:\DevBackup\explorer-icons.reg" /y 2>$null
           } -ErrorAction SilentlyContinue
           Remove-Item C:\Users\Dev\AppData\Local\Temp\* -Recurse -Force -ErrorAction SilentlyContinue
           $LASTEXITCODE=0
@@ -91,4 +99,4 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: D:\DevBackup
-          key: rdp-profile-v6-${{ github.run_id }}
+          key: rdp-profile-v7-${{ github.run_id }}
