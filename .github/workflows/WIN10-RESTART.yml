@@ -61,7 +61,7 @@ jobs:
 
       - name: Trigger Next Run
         if: always()
-        run: gh workflow run free1.yml
+        run: gh workflow run WIN10-RESTART.yml
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
