@@ -1,4 +1,4 @@
-name: Windows Server 2022 RDP - Dev_Abdo
+name: Win-10 Server 2022 RDP - Dev_Abdo
 
 on:
   workflow_dispatch:
@@ -117,7 +117,7 @@ jobs:
           
           if (-not (Test-Path $tailscalePath)) {
               Write-Host "==> Installing Tailscale..."
-              $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+              $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.102.4-amd64.msi"
               $installerPath = "$env:TEMP\tailscale.msi"
               
               Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
