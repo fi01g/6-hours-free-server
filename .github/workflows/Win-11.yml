@@ -1,11 +1,11 @@
-name: Windows Server 2022 RDP - Dev_Abdo
+name: Win-11 RDP - Dev_Abdo
 
 on:
   workflow_dispatch:
 
 jobs:
   secure-rdp:
-    runs-on: windows-2022
+    runs-on: windows-latest
     timeout-minutes: 3600
 
     steps:
