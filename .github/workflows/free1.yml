@@ -61,7 +61,7 @@ jobs:
 
       - name: Trigger Next Run
         if: always()
-        run: gh workflow run "Win-10 Server 2022 RDP - Dev_Abdo"
+        run: gh workflow run free1.yml
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
