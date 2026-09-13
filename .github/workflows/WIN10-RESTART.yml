@@ -61,90 +61,11 @@ jobs:
           BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          $msg = "✅ RDP اشتغل%0AIP: $env:TAILSCALE_IP%0AHost: gh-win-fixed%0AUser: Dev%0APass: Abdo012#%0Aوقت: $(Get-Date)"
-          Invoke-RestMethod -Uri "https://api.telegram.org/bot$env:BOT_TOKEN/sendMessage?chat_id=$env:CHAT_ID&text=$msg&parse_mode=HTML"
+          $Text = "RDP اشتغل - IP: $env:TAILSCALE_IP Host: gh-win-fixed User: Dev Pass: Abdo012#"
+          $Uri = "https://api.telegram.org/bot$env:BOT_TOKEN/sendMessage"
+          $Body = @{chat_id=$env:CHAT_ID; text=$Text}
+          Invoke-RestMethod -Uri $Uri -Method Post -Body $Body | Out-Null
           Write-Host "Sent to Telegram"
-
-      - name: Keep Alive
-        run: Start-Sleep -Seconds 21000
-
-      - name: Trigger Next Run
-        if: always()
-        run: gh workflow run WIN10-RESTART.yml
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Save Cache
-        if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: C:\Users\Dev\Documents
-          key: win-rdp-v1-${{ github.run_id }}      - name: Install Tailscale
-        run: |
-          $tp="$env:ProgramFiles\Tailscale\tailscale.exe"
-          if(-not(Test-Path $tp)){
-            $u="https://pkgs.tailscale.com/stable/tailscale-setup-1.102.4-amd64.msi"; $i="$env:TEMP\tailscale.msi"
-            Invoke-WebRequest -Uri $u -OutFile $i; Start-Process msiexec.exe -ArgumentList "/i","`"$i`"","/quiet","/norestart" -Wait; Remove-Item $i -Force
-          }
-
-      - name: Connect Tailscale Fixed
-        env:
-          TS_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
-        run: |
-          $kf="$env:TEMP\tskey.txt"; $env:TS_KEY | Out-File -FilePath $kf -Encoding ascii -NoNewline
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=file:$kf --hostname=gh-win-fixed
-          Remove-Item $kf -Force
-          $ip=$null; $r=0; while(-not $ip -and $r -lt 15){$ip=& "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4; Start-Sleep 5; $r++}
-          echo "TAILSCALE_IP=$ip" >> $env:GITHUB_ENV; Write-Host "IP: $ip Host: gh-win-fixed"
-
-      - name: Show Info
-        run: |
-          Write-Host "IP: $env:TAILSCALE_IP Host: gh-win-fixed User: Dev Pass: Abdo012#"
-
-      - name: Send Telegram RDP Info
-        env:
-          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          $msg = "✅ RDP اشتغل%0AIP: $env:TAILSCALE_IP%0AHost: gh-win-fixed%0AUser: Dev%0APass: Abdo012#%0Aوقت: $(Get-Date)"
-          Invoke-RestMethod -Uri "https://api.telegram.org/bot$env:BOT_TOKEN/sendMessage?chat_id=$env:CHAT_ID&text=$msg&parse_mode=HTML"
-          Write-Host "Sent to Telegram"
-
-      - name: Keep Alive
-        run: Start-Sleep -Seconds 21000
-
-      - name: Trigger Next Run
-        if: always()
-        run: gh workflow run WIN10-RESTART.yml
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Save Cache
-        if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: C:\Users\Dev\Documents
-          key: win-rdp-v1-${{ github.run_id }}      - name: Install Tailscale
-        run: |
-          $tp="$env:ProgramFiles\Tailscale\tailscale.exe"
-          if(-not(Test-Path $tp)){
-            $u="https://pkgs.tailscale.com/stable/tailscale-setup-1.102.4-amd64.msi"; $i="$env:TEMP\tailscale.msi"
-            Invoke-WebRequest -Uri $u -OutFile $i; Start-Process msiexec.exe -ArgumentList "/i","`"$i`"","/quiet","/norestart" -Wait; Remove-Item $i -Force
-          }
-
-      - name: Connect Tailscale Fixed
-        env:
-          TS_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
-        run: |
-          $kf="$env:TEMP\tskey.txt"; $env:TS_KEY | Out-File -FilePath $kf -Encoding ascii -NoNewline
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=file:$kf --hostname=gh-win-fixed
-          Remove-Item $kf -Force
-          $ip=$null; $r=0; while(-not $ip -and $r -lt 15){$ip=& "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4; Start-Sleep 5; $r++}
-          echo "TAILSCALE_IP=$ip" >> $env:GITHUB_ENV; Write-Host "IP: $ip Host: gh-win-fixed"
-
-      - name: Show Info
-        run: |
-          Write-Host "IP: $env:TAILSCALE_IP Host: gh-win-fixed User: Dev Pass: Abdo012#"
 
       - name: Keep Alive
         run: Start-Sleep -Seconds 21000
