@@ -7,33 +7,194 @@ jobs:
   secure-rdp:
     runs-on: windows-2022
     timeout-minutes: 3600
+
     steps:
-      - name: Enable RDP
+      - name: Enable RDP and Configure Firewall
         run: |
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
+          Write-Host "==> Enabling RDP..."
+          
+          # Enable Remote Desktop
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
+              -Name "fDenyTSConnections" -Value 0 -Force
+          
+          # Disable NLA for compatibility (optional)
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
+              -Name "UserAuthentication" -Value 0 -Force
+          
+          # Configure firewall
           netsh advfirewall firewall delete rule name="RDP-Dev" 2>$null
-          netsh advfirewall firewall add rule name="RDP-Dev" dir=in action=allow protocol=TCP localport=3389
+          netsh advfirewall firewall add rule name="RDP-Dev" `
+              dir=in action=allow protocol=TCP localport=3389
+          
+          # Restart TermService
           Restart-Service -Name TermService -Force
+          
+          Write-Host "==> RDP enabled on port 3389."
 
-      - name: Rename runneradmin to Dev_Abdo
+      - name: Create User Dev_Abdo
         run: |
-          $targetName = "Dev_Abdo"
+          $username = "Dev_Abdo"
           $password = "Abdo012#"
-
-          Write-Host "==> Renaming runneradmin to $targetName..."
-
-          $existing = Get-LocalUser -Name $targetName -ErrorAction SilentlyContinue
+          
+          Write-Host "==> Creating user $username..."
+          
+          # Remove user if exists (clean state)
+          $existing = Get-LocalUser -Name $username -ErrorAction SilentlyContinue
           if ($existing) {
-            Write-Host "  Dev_Abdo already exists, removing..."
-            Remove-LocalUser -Name $targetName -ErrorAction SilentlyContinue
+              Remove-LocalUser -Name $username -ErrorAction SilentlyContinue
+              Write-Host "  Removed existing user."
+          }
+          
+          # Create new user with no expiry
+          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+          New-LocalUser -Name $username -Password $securePass -AccountNeverExpires -PasswordNeverExpires
+          
+          # Add to Administrators (full permissions)
+          Add-LocalGroupMember -Group "Administrators" -Member $username
+          
+          # Add to Remote Desktop Users
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $username
+          
+          # Verify user was created
+          if (Get-LocalUser -Name $username) {
+              Write-Host "==> User $username created successfully."
+          } else {
+              Write-Error "User creation failed!"
+              exit 1
+          }
+          
+          echo "RDP_CREDS=User: $username | Password: $password" >> $env:GITHUB_ENV
+
+      - name: Verify Microsoft Store
+        run: |
+          Write-Host "==> Checking Microsoft Store..."
+          
+          # Check if Microsoft Store is available
+          $storePath = "C:\Program Files\WindowsApps\Microsoft.WindowsStore*"
+          $storeExists = Get-ChildItem "C:\Program Files\WindowsApps" -Filter "*WindowsStore*" -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
+          
+          if ($storeExists) {
+              Write-Host "==> Microsoft Store is installed!"
+              Write-Host "    Location: $($storeExists.FullName)"
+          } else {
+              Write-Host "==> Microsoft Store not found, installing..."
+              # Try to install via winget/AppX
+              try {
+                  # Ensure AppX service is running
+                  Start-Service -Name "AppXSvc" -ErrorAction SilentlyContinue
+                  Set-Service -Name "AppXSvc" -StartupType Automatic -ErrorAction SilentlyContinue
+                  Write-Host "==> AppX service configured."
+              } catch {
+                  Write-Host "==> Could not auto-install Store, but Desktop Experience should provide it."
+              }
           }
 
-          Rename-LocalUser -Name "runneradmin" -NewName $targetName
+      - name: Hide Other Users (Show Only Dev_Abdo)
+        run: |
+          Write-Host "==> Hiding other user accounts from login screen..."
+          
+          $specialAccountsPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\SpecialAccounts\UserList"
+          
+          # Create path if doesn't exist
+          if (-not (Test-Path $specialAccountsPath)) {
+              New-Item -Path $specialAccountsPath -Force | Out-Null
+          }
+          
+          # Hide Administrator
+          Set-ItemProperty -Path $specialAccountsPath -Name "Administrator" -Value 0 -Type DWord -Force
+          
+          # Hide Guest
+          Set-ItemProperty -Path $specialAccountsPath -Name "Guest" -Value 0 -Type DWord -Force
+          
+          # Hide DefaultAccount
+          Set-ItemProperty -Path $specialAccountsPath -Name "DefaultAccount" -Value 0 -Type DWord -Force
+          
+          Write-Host "==> Only Dev_Abdo will be visible at login."
 
-          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
-          Set-LocalUser -Name $targetName -Password $securePass
+      - name: Install Tailscale
+        run: |
+          $tailscalePath = "$env:ProgramFiles\Tailscale\tailscale.exe"
+          
+          if (-not (Test-Path $tailscalePath)) {
+              Write-Host "==> Installing Tailscale..."
+              $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+              $installerPath = "$env:TEMP\tailscale.msi"
+              
+              Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
+              Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
+              Remove-Item $installerPath -Force
+              
+              Write-Host "==> Tailscale installed."
+          } else {
+              Write-Host "==> Tailscale already installed."
+          }
 
+      - name: Connect to Tailscale
+        run: |
+          Write-Host "==> Connecting to Tailscale..."
+          
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up `
+              --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} `
+              --hostname=Dev-Abdo-RDP
+          
+          $tsIP = $null
+          $retries = 0
+          while (-not $tsIP -and $retries -lt 15) {
+              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+              Start-Sleep -Seconds 5
+              $retries++
+          }
+          
+          if (-not $tsIP) {
+              Write-Error "Tailscale IP not assigned"
+              exit 1
+          }
+          
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+          Write-Host "==> Tailscale IP: $tsIP"
+
+      - name: Verify RDP is Accessible
+        run: |
+          Write-Host "==> Verifying RDP..."
+          $test = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
+          if ($test.TcpTestSucceeded) {
+              Write-Host "==> RDP port 3389 is OPEN!"
+          } else {
+              Write-Error "RDP port test failed"
+              exit 1
+          }
+
+      - name: Show Connection Info
+        run: |
+          Write-Host ""
+          Write-Host "================================================" -ForegroundColor Cyan
+          Write-Host "  🖥️  WINDOWS SERVER 2022 RDP READY" -ForegroundColor Cyan
+          Write-Host "================================================" -ForegroundColor Cyan
+          Write-Host "  Tailscale IP:  $env:TAILSCALE_IP" -ForegroundColor White
+          Write-Host "  RDP Port:      3389" -ForegroundColor White
+          Write-Host "  Username:      Dev_Abdo" -ForegroundColor White
+          Write-Host "  Password:      Abdo012#" -ForegroundColor White
+          Write-Host "================================================" -ForegroundColor Cyan
+          Write-Host ""
+          Write-Host "  🏪 Microsoft Store: Available in Start Menu" -ForegroundColor Green
+          Write-Host ""
+          Write-Host "  📱 Connect from Android:" -ForegroundColor Yellow
+          Write-Host "  1. Install Microsoft Remote Desktop" -ForegroundColor White
+          Write-Host "  2. Add PC: $env:TAILSCALE_IP" -ForegroundColor White
+          Write-Host "  3. User: Dev_Abdo / Pass: Abdo012#" -ForegroundColor White
+          Write-Host "================================================" -ForegroundColor Cyan
+
+      - name: Keep Alive (6 hours max)
+        run: |
+          Write-Host "==> Server running for up to 6 hours..." -ForegroundColor Yellow
+          Write-Host "==> DO NOT CANCEL THIS WORKFLOW!" -ForegroundColor Red
+          Write-Host ""
+          Write-Host "  Tailscale IP: $env:TAILSCALE_IP" -ForegroundColor Cyan
+          Write-Host "  User: Dev_Abdo / Abdo012#" -ForegroundColor Cyan
+          Write-Host ""
+          
+          # Keep the runner alive
+          Start-Sleep -Seconds 21500
           # Make sure password never expires
           Set-LocalUser -Name $targetName -PasswordNeverExpires:$true
           Set-LocalUser -Name $targetName -AccountNeverExpires:$true
