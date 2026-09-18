@@ -7,7 +7,7 @@ on:
 
 jobs:
   secure-rdp:
-    runs-on: windows-2025
+    runs-on: windows-latest
     timeout-minutes: 350
 
     steps:
