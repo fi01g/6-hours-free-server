@@ -1,108 +1,260 @@
-name: Win-10 Server 2022 RDP - Dev_Abdo
+name: Win-11 Server 2025 RDP - Dev_Abdo
+
 on:
   workflow_dispatch:
   schedule:
     - cron: '0 */6 * * *'
+
 jobs:
   secure-rdp:
     runs-on: windows-latest
     timeout-minutes: 350
+
     steps:
       - uses: actions/checkout@v4
+
       - name: Enable RDP
         run: |
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
           netsh advfirewall firewall add rule name="RDP-Dev" dir=in action=allow protocol=TCP localport=3389 2>$null
           Restart-Service TermService -Force
+
       - name: Create User Dev
+        env:
+          DEV_PASSWORD: ${{ secrets.DEV_PASSWORD }}
         run: |
-          $u="Dev"; $p="Abdo012#"; $e=Get-LocalUser -Name $u -ErrorAction SilentlyContinue
-          if(-not $e){$s=ConvertTo-SecureString $p -AsPlainText -Force; New-LocalUser -Name $u -Password $s -AccountNeverExpires -PasswordNeverExpires; Add-LocalGroupMember -Group Administrators -Member $u -ErrorAction SilentlyContinue; Add-LocalGroupMember -Group "Remote Desktop Users" -Member $u -ErrorAction SilentlyContinue}
-          Enable-PSRemoting -Force 2>$null; $LASTEXITCODE=0
+          $u = "Dev"
+          $p = $env:DEV_PASSWORD
+          $e = Get-LocalUser -Name $u -ErrorAction SilentlyContinue
+
+          if (-not $e) {
+            $s = ConvertTo-SecureString $p -AsPlainText -Force
+
+            New-LocalUser `
+              -Name $u `
+              -Password $s `
+              -AccountNeverExpires `
+              -PasswordNeverExpires
+
+            Add-LocalGroupMember -Group Administrators -Member $u -ErrorAction SilentlyContinue
+            Add-LocalGroupMember -Group "Remote Desktop Users" -Member $u -ErrorAction SilentlyContinue
+          }
+
+          Enable-PSRemoting -Force 2>$null
+          $LASTEXITCODE = 0
+
       - name: Restore Full Profile
         uses: actions/cache/restore@v4
         with:
           path: D:\DevBackup
           key: rdp-profile-v7
-          restore-keys: rdp-profile-
+          restore-keys: |
+            rdp-profile-
+
       - name: Copy Settings As Dev Fix Explorer
+        env:
+          DEV_PASSWORD: ${{ secrets.DEV_PASSWORD }}
         run: |
-          if(Test-Path D:\DevBackup\wallpaper.reg){
+          if (Test-Path D:\DevBackup\wallpaper.reg) {
             robocopy D:\DevBackup\Pictures C:\Users\Dev\Pictures /E /R:0 /W:0 2>$null | Out-Null
             robocopy "D:\DevBackup\Themes" "C:\Users\Dev\AppData\Roaming\Microsoft\Windows\Themes" /E /R:0 /W:0 2>$null | Out-Null
             robocopy D:\DevBackup\Desktop C:\Users\Dev\Desktop /E /R:0 /W:0 2>$null | Out-Null
-            $p=ConvertTo-SecureString "Abdo012#" -AsPlainText -Force; $c=New-Object PSCredential("Dev",$p)
+
+            $p = ConvertTo-SecureString $env:DEV_PASSWORD -AsPlainText -Force
+            $c = New-Object PSCredential("Dev", $p)
+
             Invoke-Command -ComputerName localhost -Credential $c -ScriptBlock {
               reg import D:\DevBackup\wallpaper.reg 2>$null
               reg import D:\DevBackup\theme.reg 2>$null
               reg import D:\DevBackup\explorer-icons.reg 2>$null
             } -ErrorAction SilentlyContinue
           }
-          $LASTEXITCODE=0
+
+          $LASTEXITCODE = 0
+
       - name: Hide Test Mode After Login
+        env:
+          DEV_PASSWORD: ${{ secrets.DEV_PASSWORD }}
         run: |
-          wmic computersystem where name="%computername%" set AutomaticManagedPagefile=True 2>$null | Out-Null
+          # WMIC removed: use CIM instead
+          $cs = Get-CimInstance -ClassName Win32_ComputerSystem
+
+          if ($cs.AutomaticManagedPagefile -ne $true) {
+            Set-CimInstance `
+              -InputObject $cs `
+              -Property @{ AutomaticManagedPagefile = $true }
+          }
+
           bcdedit /set testsigning off 2>$null | Out-Null
-          $p=ConvertTo-SecureString "Abdo012#" -AsPlainText -Force; $c=New-Object PSCredential("Dev",$p)
+
+          $p = ConvertTo-SecureString $env:DEV_PASSWORD -AsPlainText -Force
+          $c = New-Object PSCredential("Dev", $p)
+
           Invoke-Command -ComputerName localhost -Credential $c -ScriptBlock {
-            Set-ItemProperty -Path "HKCU:\Control Panel\Desktop" -Name "PaintDesktopVersion" -Value 0 -Force 2>$null
-            Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue; Start-Sleep 2; Start-Process explorer.exe
-          } -ErrorAction SilentlyContinue; $LASTEXITCODE=0
+            Set-ItemProperty `
+              -Path "HKCU:\Control Panel\Desktop" `
+              -Name "PaintDesktopVersion" `
+              -Value 0 `
+              -Force
+
+            Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
+            Start-Sleep 2
+            Start-Process explorer.exe
+          } -ErrorAction SilentlyContinue
+
+          $LASTEXITCODE = 0
+
       - name: Hide Watermark With UWD
         run: |
-          try{ Invoke-WebRequest -Uri "https://github.com/DoubleLab/with/releases/download/v1.0/uwd.exe" -OutFile C:\Temp\uwd.exe -ErrorAction SilentlyContinue; Start-Process C:\Temp\uwd.exe -ArgumentList "/S" -Wait -ErrorAction SilentlyContinue; Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue; Start-Sleep 2; Start-Process explorer.exe } catch {};$LASTEXITCODE=0
+          try {
+            Invoke-WebRequest `
+              -Uri "https://github.com/DoubleLab/with/releases/download/v1.0/uwd.exe" `
+              -OutFile C:\Temp\uwd.exe `
+              -ErrorAction SilentlyContinue
+
+            Start-Process `
+              C:\Temp\uwd.exe `
+              -ArgumentList "/S" `
+              -Wait `
+              -ErrorAction SilentlyContinue
+
+            Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
+            Start-Sleep 2
+            Start-Process explorer.exe
+          }
+          catch {}
+
+          $LASTEXITCODE = 0
+
       - name: Install Tailscale
         run: |
-          $tp="$env:ProgramFiles\Tailscale\tailscale.exe"; if(-not(Test-Path $tp)){Invoke-WebRequest -Uri https://pkgs.tailscale.com/stable/tailscale-setup-1.102.4-amd64.msi -OutFile $env:TEMP\t.msi; Start-Process msiexec.exe -ArgumentList "/i","`"$env:TEMP\t.msi`"","/quiet" -Wait}
+          $tp = "$env:ProgramFiles\Tailscale\tailscale.exe"
+
+          if (-not (Test-Path $tp)) {
+            Invoke-WebRequest `
+              -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-1.102.4-amd64.msi" `
+              -OutFile "$env:TEMP\t.msi"
+
+            Start-Process `
+              msiexec.exe `
+              -ArgumentList "/i", "`"$env:TEMP\t.msi`"", "/quiet" `
+              -Wait
+          }
+
       - name: Connect Tailscale Fixed
         env:
           TS_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
         run: |
-          $kf="$env:TEMP\tskey.txt"; $env:TS_KEY | Out-File $kf -Encoding ascii -NoNewline; & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=file:$kf --hostname=gh-win-fixed; Remove-Item $kf -Force
-          $ip=& "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4; echo "TAILSCALE_IP=$ip" >> $env:GITHUB_ENV; Write-Host "IP $ip"
-      - name: Send Telegram With Copy Buttons
-        env:
-          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          $ip=$env:TAILSCALE_IP; $k=@{inline_keyboard=@(@(@{text="📋 نسخ IP";copy_text=@{text="$ip"}}),@(@{text="👤 نسخ اليوزر";copy_text=@{text="Dev"}}),@(@{text="🔑 نسخ الباسورد";copy_text=@{text="Abdo012#"}}))}; $p=@{chat_id=$env:CHAT_ID; text="✅ RDP جاهز`nIP: $ip`nHost: gh-win-fixed"; reply_markup=$k}|ConvertTo-Json -Depth 5 -Compress; $resp=Invoke-RestMethod -Uri "https://api.telegram.org/bot$env:BOT_TOKEN/sendMessage" -Method Post -ContentType "application/json" -Body $p; $msgId=$resp.result.message_id; echo "MSG_ID=$msgId" >> $env:GITHUB_ENV; $msgId | Out-File C:\Temp\msg_id.txt; Write-Host "Sent msg $msgId"
+          $kf = "$env:TEMP\tskey.txt"
+
+          $env:TS_KEY |
+            Out-File $kf -Encoding ascii -NoNewline
+
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" `
+            up `
+            --authkey=file:$kf `
+            --hostname=gh-win-fixed
+
+          Remove-Item $kf -Force
+
+          $ip = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+
+          echo "TAILSCALE_IP=$ip" >> $env:GITHUB_ENV
+
+          Write-Host "Tailscale IP: $ip"
+
       - name: Keep Alive
-        run: Start-Sleep -Seconds 21000
+        run: |
+          Start-Sleep -Seconds 21000
+
       - name: Edit Telegram Expired
         if: always()
         env:
           BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          $msgId=$env:MSG_ID; if(-not $msgId -and (Test-Path C:\Temp\msg_id.txt)){ $msgId=Get-Content C:\Temp\msg_id.txt }
-          if($msgId){
-            $text="❌ السيرفر انتهى`nIP: $env:TAILSCALE_IP لم يعد شغال`nسيتم تشغيل سيرفر جديد برسالة جديدة"
-            $payload=@{chat_id=$env:CHAT_ID; message_id=[int]$msgId; text=$text} | ConvertTo-Json -Compress
-            Invoke-RestMethod -Uri "https://api.telegram.org/bot$env:BOT_TOKEN/editMessageText" -Method Post -ContentType "application/json" -Body $payload | Out-Null
+          $msgId = $env:MSG_ID
+
+          if (-not $msgId -and (Test-Path C:\Temp\msg_id.txt)) {
+            $msgId = Get-Content C:\Temp\msg_id.txt
+          }
+
+          if ($msgId) {
+            $text = "❌ السيرفر انتهى`nIP: $env:TAILSCALE_IP لم يعد شغال`nسيتم تشغيل سيرفر جديد برسالة جديدة"
+
+            $payload = @{
+              chat_id    = $env:CHAT_ID
+              message_id = [int]$msgId
+              text       = $text
+            } | ConvertTo-Json -Compress
+
+            Invoke-RestMethod `
+              -Uri "https://api.telegram.org/bot$env:BOT_TOKEN/editMessageText" `
+              -Method Post `
+              -ContentType "application/json" `
+              -Body $payload |
+              Out-Null
+
             Write-Host "Edited old message $msgId to expired"
           }
-          $LASTEXITCODE=0
+
+          $LASTEXITCODE = 0
+
       - name: Backup As Dev
         if: always()
+        env:
+          DEV_PASSWORD: ${{ secrets.DEV_PASSWORD }}
         run: |
           New-Item -Path D:\DevBackup -ItemType Directory -Force | Out-Null
-          Remove-Item D:\DevBackup\Desktop -Recurse -Force -ErrorAction SilentlyContinue; robocopy C:\Users\Dev\Desktop D:\DevBackup\Desktop /E /R:0 /W:0 2>$null | Out-Null
-          Remove-Item D:\DevBackup\Pictures -Recurse -Force -ErrorAction SilentlyContinue; robocopy C:\Users\Dev\Pictures D:\DevBackup\Pictures /E /R:0 /W:0 2>$null | Out-Null
-          robocopy "C:\Users\Dev\AppData\Roaming\Microsoft\Windows\Themes" D:\DevBackup\Themes /E /R:0 /W:0 2>$null | Out-Null
-          $p=ConvertTo-SecureString "Abdo012#" -AsPlainText -Force; $c=New-Object PSCredential("Dev",$p)
+
+          Remove-Item D:\DevBackup\Desktop -Recurse -Force -ErrorAction SilentlyContinue
+          robocopy C:\Users\Dev\Desktop D:\DevBackup\Desktop /E /R:0 /W:0 2>$null | Out-Null
+
+          Remove-Item D:\DevBackup\Pictures -Recurse -Force -ErrorAction SilentlyContinue
+          robocopy C:\Users\Dev\Pictures D:\DevBackup\Pictures /E /R:0 /W:0 2>$null | Out-Null
+
+          robocopy `
+            "C:\Users\Dev\AppData\Roaming\Microsoft\Windows\Themes" `
+            D:\DevBackup\Themes `
+            /E /R:0 /W:0 2>$null |
+            Out-Null
+
+          $p = ConvertTo-SecureString $env:DEV_PASSWORD -AsPlainText -Force
+          $c = New-Object PSCredential("Dev", $p)
+
           Invoke-Command -ComputerName localhost -Credential $c -ScriptBlock {
-            reg export "HKCU\Control Panel\Desktop" "D:\DevBackup\wallpaper.reg" /y 2>$null
-            reg export "HKCU\Software\Microsoft\Windows\CurrentVersion\Themes" "D:\DevBackup\theme.reg" /y 2>$null
-            reg export "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\HideDesktopIcons" "D:\DevBackup\explorer-icons.reg" /y 2>$null
+            reg export `
+              "HKCU\Control Panel\Desktop" `
+              "D:\DevBackup\wallpaper.reg" `
+              /y 2>$null
+
+            reg export `
+              "HKCU\Software\Microsoft\Windows\CurrentVersion\Themes" `
+              "D:\DevBackup\theme.reg" `
+              /y 2>$null
+
+            reg export `
+              "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\HideDesktopIcons" `
+              "D:\DevBackup\explorer-icons.reg" `
+              /y 2>$null
           } -ErrorAction SilentlyContinue
-          Remove-Item C:\Users\Dev\AppData\Local\Temp\* -Recurse -Force -ErrorAction SilentlyContinue
-          $LASTEXITCODE=0
+
+          Remove-Item `
+            C:\Users\Dev\AppData\Local\Temp\* `
+            -Recurse `
+            -Force `
+            -ErrorAction SilentlyContinue
+
+          $LASTEXITCODE = 0
+
       - name: Trigger Next Run
         if: always()
-        run: gh workflow run WIN10-RESTART.yml
+        run: |
+          gh workflow run WIN10-RESTART.yml
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Save Full Profile
         if: always()
         uses: actions/cache/save@v4
